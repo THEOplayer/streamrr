@@ -3,9 +3,10 @@ use std::path::Path;
 
 use anyhow::Result;
 use m3u8_rs::*;
+use sha1::{Digest, Sha1};
 use url::Url;
 
-use crate::shared::ByteRange;
+use crate::shared::{ByteRange, hex};
 
 pub const ORIGINAL_URI: &str = "X-ORIGINAL-URI";
 pub const ORIGINAL_MAP_URI: &str = "X-ORIGINAL-MAP-URI";
@@ -64,17 +65,11 @@ fn rewrite_segment(
         *next_byte_range_start = 0;
     }
     if let Some(key) = media_segment.key.as_mut() {
-        rewrite_key(
-            key,
-            media_sequence_number,
-            playlist_url,
-            &mut media_segment.unknown_tags,
-        )?;
+        rewrite_key(key, playlist_url, &mut media_segment.unknown_tags)?;
     }
     if let Some(map) = media_segment.map.as_mut() {
         rewrite_map(
             map,
-            media_sequence_number,
             playlist_url,
             next_byte_range_start,
             &mut media_segment.unknown_tags,
@@ -84,12 +79,7 @@ fn rewrite_segment(
     Ok(())
 }
 
-fn rewrite_key(
-    key: &mut Key,
-    media_sequence_number: u64,
-    playlist_url: &Url,
-    unknown_tags: &mut Vec<ExtTag>,
-) -> Result<()> {
+fn rewrite_key(key: &mut Key, playlist_url: &Url, unknown_tags: &mut Vec<ExtTag>) -> Result<()> {
     if key.method != KeyMethod::AES128 {
         return Ok(());
     }
@@ -105,13 +95,16 @@ fn rewrite_key(
         tag: ORIGINAL_KEY_URI.to_string(),
         rest: Some(key_url.as_str().to_string()),
     });
-    *key_uri = format!("key-{media_sequence_number}.bin");
+    // Use a hash of the key URL as filename.
+    // Don't use the media sequence number, since it's likely that this key will appear
+    // on a different segment in a future media playlist.
+    let key_url_hash = Sha1::digest(key_url.as_str().as_bytes());
+    *key_uri = format!("key-{}.bin", hex(key_url_hash));
     Ok(())
 }
 
 fn rewrite_map(
     map: &mut Map,
-    media_sequence_number: u64,
     playlist_url: &Url,
     next_byte_range_start: &mut u64,
     unknown_tags: &mut Vec<ExtTag>,
@@ -128,8 +121,12 @@ fn rewrite_map(
         &mut map.other_attributes,
         next_byte_range_start,
     );
+    // Use a hash of the key URL as filename.
+    // Don't use the media sequence number, since it's likely that this key will appear
+    // on a different segment in a future media playlist.
+    let map_url_hash = Sha1::digest(map_url.as_str().as_bytes());
     let file_ext = url_file_extension(&map_url).unwrap_or_else(|| "mp4".to_string());
-    let file_name = format!("init-{media_sequence_number}.{file_ext}");
+    let file_name = format!("init-{}.{}", hex(map_url_hash), file_ext);
     map.uri = file_name;
     Ok(())
 }

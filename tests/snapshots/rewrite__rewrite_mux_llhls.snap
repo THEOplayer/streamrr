@@ -6,7 +6,7 @@ expression: media_playlist_to_string(&playlist)
 #EXT-X-VERSION:7
 #EXT-X-TARGETDURATION:2
 #EXT-X-MEDIA-SEQUENCE:15032
-#EXT-X-MAP:URI="init-15032.m4s"
+#EXT-X-MAP:URI="init-d3283d01f3a0a7ab39af8ce7d7fc7c1df734b493.m4s"
 #EXT-X-PROGRAM-DATE-TIME:2025-10-23T11:50:23.455Z
 #EXT-X-ORIGINAL-URI:https://chunk-gcp-us-east1-vop1.fastly.mux.com/v1/chunk/S9Kl4RiJTmzqwOsgJ9cDpqNQmt8OGwrg82ODlo6BbQ1kG01gg2HmJuXxSSpMZvLbte2ztif193JSEpzsE00Ypwh9wUKmSwld8u/15032.m4s?skid=default&signature=NjkwMzUzNDBfNzYxODljN2IxZDg0NmZkMmY3ZTBiYWI5MDQ2Y2YyYmQyNWYyNzI3Mzg1NTJiYTc4NDk4YTQ2MWEzOTVjNDNkZg==&zone=0
 #EXT-X-ORIGINAL-MAP-URI:https://chunk-gcp-us-east1-vop1.fastly.mux.com/v1/chunk/S9Kl4RiJTmzqwOsgJ9cDpqNQmt8OGwrg82ODlo6BbQ1kG01gg2HmJuXxSSpMZvLbte2ztif193JSEpzsE00Ypwh9wUKmSwld8u/18446744073709551615.m4s?skid=default&signature=NjkwMzUzNDBfNmUyZGI3MjI2ZTU0N2JhMGYxNTkxY2IxMzAxNjEzZjE0NTM1OGI2MDg0MjNhYzYzNzNhNDc4YzU1ZDZkNmExMQ==&zone=0
