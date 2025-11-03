@@ -1,3 +1,5 @@
+use std::fs::File;
+use std::io::BufReader;
 use std::net::IpAddr;
 use std::path::PathBuf;
 
@@ -84,16 +86,25 @@ enum CliCommand {
         #[arg(short = 'p', long, value_name = "PORT", default_value_t = 8080)]
         port: u16,
     },
+    // Import an HTTP Archive (HAR) file as a recording.
+    Import {
+        /// The path of the HAR file.
+        #[arg(value_name = "HAR")]
+        har_path: PathBuf,
+        /// The directory path to store the recording of the HLS stream.
+        #[arg(value_name = "PATH")]
+        recording_path: PathBuf,
+    },
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
     let Some(command) = args.command else {
         if args.license {
             println!(include_str!("../LICENSE.md"));
             println!(include_str!("../NOTICE.md"));
-            return;
+            return Ok(());
         } else {
             // If --license is not set, then a subcommand is required.
             let Err(e) = CliRequired::try_parse() else {
@@ -164,5 +175,14 @@ async fn main() {
                 }
             };
         }
+        CliCommand::Import {
+            har_path,
+            recording_path,
+        } => {
+            let har_file = File::open(har_path)?;
+            let har = serde_json::from_reader(BufReader::new(har_file))?;
+            streamrr::import::import_har(har, &recording_path).await?;
+        }
     }
+    Ok(())
 }
