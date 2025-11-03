@@ -14,6 +14,8 @@ pub const ORIGINAL_SERVER_CONTROL: &str = "X-ORIGINAL-SERVER-CONTROL";
 pub const ORIGINAL_PRELOAD_HINT: &str = "X-ORIGINAL-PRELOAD-HINT";
 pub const ORIGINAL_RENDITION_REPORT: &str = "X-ORIGINAL-RENDITION-REPORT";
 
+const DEFAULT_FILE_EXT: &str = "ts";
+
 pub fn rewrite_media_playlist(
     url: &Url,
     media_playlist: &mut MediaPlaylist,
@@ -133,7 +135,7 @@ fn rewrite_map(
     // Don't use the media sequence number, since it's likely that this key will appear
     // on a different segment in a future media playlist.
     let map_url_hash = Sha1::digest(map_url.as_str().as_bytes());
-    let file_ext = url_file_extension(&map_url).unwrap_or("mp4");
+    let file_ext = url_file_extension(&map_url).unwrap_or(DEFAULT_FILE_EXT);
     let file_name = format!("init-{}.{}", hex(map_url_hash), file_ext);
     map.uri = file_name;
     Ok(())
@@ -197,7 +199,7 @@ fn get_or_update_file_ext(url: &Url, last_segment_ext: &mut Option<String>) -> S
             ext
         }
         (None, Some(last_ext)) => last_ext.clone(),
-        (None, None) => "ts".to_string(),
+        (None, None) => DEFAULT_FILE_EXT.to_owned(),
     }
 }
 
