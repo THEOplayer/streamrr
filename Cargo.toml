@@ -26,6 +26,7 @@ anyhow = "1.0.102"
 indexmap = { version = "2.13.0", features = ["serde"] }
 sha1 = "0.10.6"
 thiserror = "2.0.18"
+har = "0.8.1"
 
 [dev-dependencies]
 insta = "1.46.3"
