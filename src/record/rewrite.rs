@@ -1,10 +1,9 @@
 use crate::record::RecordError;
-use crate::shared::{ByteRange, hex};
-use anyhow::anyhow;
+use crate::shared::{ByteRange, hex, url_file_extension};
+use anyhow::{Result, anyhow};
 use m3u8_rs::*;
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
-use std::path::Path;
 use url::Url;
 
 pub const ORIGINAL_URI: &str = "X-ORIGINAL-URI";
@@ -188,12 +187,6 @@ pub fn remove_segments_from_end(media_playlist: &mut MediaPlaylist, highest_medi
     }
     // Stop refreshing
     media_playlist.end_list = true;
-}
-
-fn url_file_extension(url: &Url) -> Option<String> {
-    let url = Url::parse(url.as_str()).ok()?;
-    let file_name = url.path_segments()?.next_back()?;
-    Some(Path::new(file_name).extension()?.to_str()?.to_owned())
 }
 
 fn get_or_update_file_ext(url: &Url, last_segment_ext: &mut Option<String>) -> String {
