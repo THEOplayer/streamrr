@@ -1,8 +1,11 @@
+use base64::prelude::*;
 pub use har::v1_3::*;
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use serde_with::skip_serializing_none;
+use std::io::{Error, Result};
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub enum Version {
     /// Version 1.2 of the HAR specification.
     ///
@@ -24,13 +27,13 @@ pub enum Version {
     V1_3,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Har {
     pub log: Log,
 }
 
 #[skip_serializing_none]
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct Log {
     pub version: Version,
     pub creator: Creator,
@@ -41,7 +44,7 @@ pub struct Log {
 }
 
 #[skip_serializing_none]
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct Entries {
     pub pageref: Option<String>,
     #[serde(rename = "startedDateTime")]
@@ -58,7 +61,7 @@ pub struct Entries {
 }
 
 #[skip_serializing_none]
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct Response {
     pub status: i64,
     #[serde(rename = "statusText")]
@@ -80,16 +83,42 @@ pub struct Response {
 }
 
 #[skip_serializing_none]
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct Content {
     #[serde(default = "default_isize")]
     pub size: i64,
     pub compression: Option<i64>,
     #[serde(rename = "mimeType")]
     pub mime_type: Option<String>,
-    pub text: Option<String>,
+    // CHANGED: Parse as raw value, to avoid keeping a ton of strings in memory.
+    // pub text: Option<String>,
+    text: Option<Box<RawValue>>,
     pub encoding: Option<String>,
     pub comment: Option<String>,
+}
+
+impl Content {
+    pub(crate) fn text(&self) -> Result<String> {
+        let Some(raw_text) = self.text.as_ref() else {
+            // Response has no content.
+            return Ok(String::new());
+        };
+        // Parse back into a string.
+        let text = serde_json::from_str::<String>(raw_text.as_ref().get())
+            .map_err(|_| Error::other("invalid content"))?;
+        Ok(text)
+    }
+
+    pub(crate) fn as_bytes(&self) -> Result<Vec<u8>> {
+        let text = self.text()?;
+        // Decode as base64 (if needed).
+        match self.encoding.as_ref() {
+            Some(encoding) if encoding == "base64" => BASE64_STANDARD
+                .decode(text.as_bytes())
+                .map_err(|_| Error::other("invalid base64")),
+            _ => Ok(text.into_bytes()),
+        }
+    }
 }
 
 fn default_isize() -> i64 {
