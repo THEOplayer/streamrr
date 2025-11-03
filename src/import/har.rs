@@ -1,11 +1,10 @@
 use base64::prelude::*;
 pub use har::v1_3::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::value::RawValue;
-use serde_with::skip_serializing_none;
 use std::io::{Error, Result};
 
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Default)]
 pub enum Version {
     /// Version 1.2 of the HAR specification.
     ///
@@ -27,13 +26,12 @@ pub enum Version {
     V1_3,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Har {
     pub log: Log,
 }
 
-#[skip_serializing_none]
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct Log {
     pub version: Version,
     pub creator: Creator,
@@ -43,8 +41,7 @@ pub struct Log {
     pub comment: Option<String>,
 }
 
-#[skip_serializing_none]
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct Entries {
     pub pageref: Option<String>,
     #[serde(rename = "startedDateTime")]
@@ -60,8 +57,7 @@ pub struct Entries {
     pub comment: Option<String>,
 }
 
-#[skip_serializing_none]
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct Response {
     pub status: i64,
     #[serde(rename = "statusText")]
@@ -82,8 +78,7 @@ pub struct Response {
     pub headers_compression: Option<i64>,
 }
 
-#[skip_serializing_none]
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct Content {
     #[serde(default = "default_isize")]
     pub size: i64,
