@@ -133,7 +133,7 @@ fn rewrite_map(
     // Don't use the media sequence number, since it's likely that this key will appear
     // on a different segment in a future media playlist.
     let map_url_hash = Sha1::digest(map_url.as_str().as_bytes());
-    let file_ext = url_file_extension(&map_url).unwrap_or_else(|| "mp4".to_string());
+    let file_ext = url_file_extension(&map_url).unwrap_or("mp4");
     let file_name = format!("init-{}.{}", hex(map_url_hash), file_ext);
     map.uri = file_name;
     Ok(())
@@ -192,6 +192,7 @@ pub fn remove_segments_from_end(media_playlist: &mut MediaPlaylist, highest_medi
 fn get_or_update_file_ext(url: &Url, last_segment_ext: &mut Option<String>) -> String {
     match (url_file_extension(url), last_segment_ext.as_ref()) {
         (Some(ext), _) => {
+            let ext = ext.to_owned();
             *last_segment_ext = Some(ext.clone());
             ext
         }
