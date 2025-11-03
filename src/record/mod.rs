@@ -561,13 +561,13 @@ fn media_applies_to_variant(media: &AlternativeMedia, variant_stream: &VariantSt
     }
 }
 
-struct RecordingFile {
+pub(crate) struct RecordingFile {
     recording: Recording,
     file: fs::File,
 }
 
 impl RecordingFile {
-    async fn new(path: &Path) -> io::Result<Self> {
+    pub(crate) async fn new(path: &Path) -> io::Result<Self> {
         let file = fs::File::create(path).await?;
         Ok(Self {
             recording: Recording::new(),
@@ -575,7 +575,7 @@ impl RecordingFile {
         })
     }
 
-    async fn add_and_save(
+    pub(crate) async fn add_and_save(
         &mut self,
         time: DateTime<Utc>,
         playlist_name: &str,
@@ -585,7 +585,7 @@ impl RecordingFile {
         self.save().await
     }
 
-    async fn save(&mut self) -> io::Result<()> {
+    pub(crate) async fn save(&mut self) -> io::Result<()> {
         let recording_json = serde_json::to_string_pretty(&self.recording)?;
         let recording_bytes = recording_json.as_bytes();
         self.file.rewind().await?;
