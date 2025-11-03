@@ -2,9 +2,8 @@ pub use har::v1_3::*;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(tag = "version")]
-pub enum Spec {
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
+pub enum Version {
     /// Version 1.2 of the HAR specification.
     ///
     /// Refer to the official
@@ -12,7 +11,8 @@ pub enum Spec {
     /// for more information.
     #[allow(non_camel_case_types)]
     #[serde(rename = "1.2")]
-    V1_2(Log),
+    #[default]
+    V1_2,
 
     // Version 1.3 of the HAR specification.
     //
@@ -21,17 +21,18 @@ pub enum Spec {
     // for more information.
     #[allow(non_camel_case_types)]
     #[serde(rename = "1.3")]
-    V1_3(Log),
+    V1_3,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Har {
-    pub log: Spec,
+    pub log: Log,
 }
 
 #[skip_serializing_none]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
 pub struct Log {
+    pub version: Version,
     pub creator: Creator,
     pub browser: Option<Creator>,
     pub pages: Option<Vec<Pages>>,
