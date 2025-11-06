@@ -24,6 +24,8 @@ chrono = "0.4.42"
 anyhow = "1.0.100"
 indexmap = { version = "2.11.4", features = ["serde"] }
 sha1 = "0.10.6"
+thiserror = "2.0.17"
+ctrlc = "3.5.1"
 
 [dev-dependencies]
 insta = "1.43.2"

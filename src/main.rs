@@ -2,10 +2,13 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use tokio::spawn;
 use url::Url;
 
 use streamrr::record::RecordOptions;
-use streamrr::shared::{MediaSelect, VariantSelect, VariantSelectOptions};
+use streamrr::shared::{
+    AbortError, MediaSelect, VariantSelect, VariantSelectOptions, abort_on_ctrlc,
+};
 
 /// Record and replay HLS streams.
 #[derive(Parser)]
@@ -126,7 +129,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 video,
                 subtitle,
             };
-            streamrr::record::record(&manifest_url, &recording_path, options).await?;
+            let record_task = spawn(async move {
+                streamrr::record::record(&manifest_url, &recording_path, options).await
+            });
+            match abort_on_ctrlc(record_task).await {
+                Ok(()) => {}
+                Err(AbortError::Join(e)) if e.is_cancelled() => eprintln!("Stopped recording."),
+                Err(e) => eprintln!("{e}"),
+            };
         }
         CliCommand::Replay {
             recording_path,
