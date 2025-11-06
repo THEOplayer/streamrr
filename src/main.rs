@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -84,20 +83,15 @@ enum CliCommand {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() {
     let args = Cli::parse();
-    if args.license {
-        println!(
-            "{}\n{}",
-            include_str!("../LICENSE.md"),
-            include_str!("../NOTICE.md")
-        );
-        return Ok(());
-    }
-    // If --license is not set, then a subcommand is required.
-    let command = match args.command {
-        Some(command) => command,
-        None => {
+    let Some(command) = args.command else {
+        if args.license {
+            println!(include_str!("../LICENSE.md"));
+            println!(include_str!("../NOTICE.md"));
+            return;
+        } else {
+            // If --license is not set, then a subcommand is required.
             let Err(e) = CliRequired::try_parse() else {
                 unreachable!("expected missing subcommand")
             };
@@ -157,5 +151,4 @@ async fn main() -> Result<(), Box<dyn Error>> {
             };
         }
     }
-    Ok(())
 }
