@@ -1,5 +1,4 @@
 use std::convert::Infallible;
-use std::error::Error;
 use std::fmt::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -25,19 +24,25 @@ struct PlaylistQueryParams {
     start: Option<i64>,
 }
 
-#[derive(Debug)]
-enum ReplayError {
-    PlaylistNotFound,
-    PlaylistFileError,
+#[derive(thiserror::Error, Debug)]
+pub enum ReplayError {
+    #[error("Missing recording file")]
+    MissingRecording,
+    #[error("Invalid recording: {0}")]
+    InvalidRecording(#[from] serde_json::Error),
+    #[error("Missing start time in recording")]
+    MissingStartTime,
 }
 
-impl Reject for ReplayError {}
-
-pub async fn replay(recording_path: &Path, port: u16) -> Result<(), Box<dyn Error>> {
+pub async fn replay(recording_path: &Path, port: u16) -> Result<(), ReplayError> {
     let recording_path = recording_path.to_owned();
-    let raw_recording = fs::read_to_string(recording_path.join("recording.json")).await?;
+    let raw_recording = fs::read_to_string(recording_path.join("recording.json"))
+        .await
+        .map_err(|_| ReplayError::MissingRecording)?;
     let recording = serde_json::from_str::<Recording>(&raw_recording)?;
-    let recording_start = *recording.earliest_time().ok_or("empty recording")?;
+    let recording_start = *recording
+        .earliest_time()
+        .ok_or(ReplayError::MissingStartTime)?;
 
     let segments = warp::fs::dir(recording_path.clone());
 
@@ -59,10 +64,10 @@ pub async fn replay(recording_path: &Path, port: u16) -> Result<(), Box<dyn Erro
                     &recording_path,
                     start,
                 )
-                .ok_or_else(|| custom(ReplayError::PlaylistNotFound))?;
+                .ok_or_else(|| custom(ServerError::PlaylistNotFound))?;
                 let reply = m3u8_reply(&absolute_path, start)
                     .await
-                    .map_err(|_| custom(ReplayError::PlaylistFileError))?
+                    .map_err(|_| custom(ServerError::PlaylistFileError))?
                     .into_response();
                 Ok::<reply::Response, Rejection>(reply)
             }
@@ -165,23 +170,30 @@ async fn m3u8_reply(path: &Path, start: i64) -> tokio::io::Result<impl Reply + u
     Ok(response)
 }
 
+#[derive(thiserror::Error, Debug)]
+enum ServerError {
+    #[error("No playlist found")]
+    PlaylistNotFound,
+    #[error("Failed to load playlist")]
+    PlaylistFileError,
+}
+
+impl Reject for ServerError {}
+
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     let code: StatusCode;
-    let message: &str;
+    let message: String;
 
     if err.is_not_found() {
         code = StatusCode::NOT_FOUND;
-        message = "Not found";
-    } else if let Some(e) = err.find::<ReplayError>() {
-        message = match e {
-            ReplayError::PlaylistNotFound => "No playlist found",
-            ReplayError::PlaylistFileError => "Failed to load playlist",
-        };
+        message = "Not found".to_owned();
+    } else if let Some(e) = err.find::<ServerError>() {
+        message = e.to_string();
         code = StatusCode::INTERNAL_SERVER_ERROR;
     } else {
         eprintln!("Unhandled rejection: {:?}", err);
         code = StatusCode::INTERNAL_SERVER_ERROR;
-        message = "Internal server error";
+        message = "Internal server error".to_owned();
     }
 
     let html = warp::reply::html(message);
