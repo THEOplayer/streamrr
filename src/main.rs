@@ -134,8 +134,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             });
             match abort_on_ctrlc(record_task).await {
                 Ok(()) => {}
-                Err(AbortError::Join(e)) if e.is_cancelled() => eprintln!("Stopped recording."),
-                Err(e) => eprintln!("{e}"),
+                Err(AbortError::Join(e)) if e.is_cancelled() => println!("Stopped recording."),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
             };
         }
         CliCommand::Replay {
@@ -146,8 +149,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 spawn(async move { streamrr::replay::replay(&recording_path, port).await });
             match abort_on_ctrlc(replay_task).await {
                 Ok(()) => {}
-                Err(AbortError::Join(e)) if e.is_cancelled() => eprintln!("Stopped replaying."),
-                Err(e) => eprintln!("{e}"),
+                Err(AbortError::Join(e)) if e.is_cancelled() => println!("Stopped replaying."),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
             };
         }
     }
