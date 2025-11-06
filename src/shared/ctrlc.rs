@@ -4,12 +4,12 @@ use tokio::task::{JoinError, JoinHandle};
 
 #[derive(thiserror::Error, Debug)]
 pub enum AbortError<E> {
-    #[error("{0}")]
-    Err(E),
     #[error("io error: {0}")]
     Io(std::io::Error),
     #[error("cancelled")]
     Join(JoinError),
+    #[error(transparent)]
+    Other(E),
 }
 
 pub async fn abort_on_ctrlc<T, E>(mut task: JoinHandle<Result<T, E>>) -> Result<T, AbortError<E>> {
@@ -20,7 +20,7 @@ pub async fn abort_on_ctrlc<T, E>(mut task: JoinHandle<Result<T, E>>) -> Result<
         select! {
             result = &mut task => return match result {
                 Ok(Ok(result)) => Ok(result),
-                Ok(Err(err)) => Err(AbortError::Err(err)),
+                Ok(Err(err)) => Err(AbortError::Other(err)),
                 Err(err) => Err(AbortError::Join(err))
             },
             _ = ctrlc_stream.recv() => {
