@@ -142,7 +142,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             recording_path,
             port,
         } => {
-            streamrr::replay::replay(&recording_path, port).await?;
+            let replay_task =
+                spawn(async move { streamrr::replay::replay(&recording_path, port).await });
+            match abort_on_ctrlc(replay_task).await {
+                Ok(()) => {}
+                Err(AbortError::Join(e)) if e.is_cancelled() => eprintln!("Stopped replaying."),
+                Err(e) => eprintln!("{e}"),
+            };
         }
     }
     Ok(())
