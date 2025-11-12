@@ -1,14 +1,13 @@
-use std::io;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::{StreamExt, TryStreamExt, iter};
 use m3u8_rs::*;
 use reqwest::Client;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
@@ -34,7 +33,19 @@ pub struct RecordOptions {
     pub end: Option<f32>,
 }
 
-pub async fn record(url: &Url, dest: &Path, options: RecordOptions) -> Result<()> {
+#[derive(thiserror::Error, Debug)]
+pub enum RecordError {
+    #[error("configuration error: {0}")]
+    Config(&'static str),
+    #[error("parse error: {0}")]
+    Parse(#[source] anyhow::Error),
+    #[error("I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("cancelled")]
+    Cancelled,
+}
+
+pub async fn record(url: &Url, dest: &Path, options: RecordOptions) -> Result<(), RecordError> {
     fs::create_dir_all(dest).await?;
     let recording_path = dest.join("recording.json");
     let recording = RecordingFile::new(&recording_path).await?;
@@ -43,7 +54,7 @@ pub async fn record(url: &Url, dest: &Path, options: RecordOptions) -> Result<()
     let client = Client::new();
     let raw_playlist = download_playlist(&client, url).await?;
     let initial_playlist = parse_playlist_res(raw_playlist.as_bytes())
-        .map_err(|_| anyhow!("Error while parsing playlist"))?;
+        .map_err(|e| RecordError::Parse(anyhow!("Error while parsing playlist: {e}")))?;
     match initial_playlist {
         Playlist::MasterPlaylist(master_playlist) => {
             // Master playlist
@@ -73,7 +84,7 @@ async fn record_master_playlist(
     recording: Arc<Mutex<RecordingFile>>,
     options: RecordOptions,
     master_playlist: MasterPlaylist,
-) -> Result<()> {
+) -> Result<(), RecordError> {
     let mut new_master_playlist = master_playlist.clone();
     // Select variant streams
     new_master_playlist.variants = options
@@ -81,7 +92,7 @@ async fn record_master_playlist(
         .filter_variants(&master_playlist.variants)
         .to_vec();
     if new_master_playlist.variants.is_empty() {
-        bail!("No variant streams selected.");
+        return Err(RecordError::Config("No variant streams selected."));
     }
     // Select renditions
     let alternatives = &mut new_master_playlist.alternatives;
@@ -131,7 +142,9 @@ async fn record_master_playlist(
     // Start recording selected variant streams and renditions
     let mut join_set = JoinSet::new();
     for (i, variant) in new_master_playlist.variants.iter_mut().enumerate() {
-        let variant_url = url.join(&variant.uri)?;
+        let variant_url = url
+            .join(&variant.uri)
+            .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", &variant.uri)))?;
         let variant_dir = format!("variant{i}/");
         let client = client.clone();
         let dest = PathBuf::from(dest);
@@ -158,7 +171,9 @@ async fn record_master_playlist(
         let Some(media_uri) = &media.uri else {
             continue;
         };
-        let media_url = url.join(media_uri)?;
+        let media_url = url
+            .join(media_uri)
+            .map_err(|e| RecordError::Parse(anyhow!("Error while parsing playlist: {e}")))?;
         let media_dir = format!("media-{}-{}/", media.group_id, i);
         let client = client.clone();
         let dest = PathBuf::from(dest);
@@ -185,7 +200,7 @@ async fn record_master_playlist(
         .await?;
     // Wait for all tasks to complete
     while let Some(res) = join_set.join_next().await {
-        res??;
+        res.map_err(|_| RecordError::Cancelled)??;
     }
     Ok(())
 }
@@ -198,7 +213,7 @@ async fn record_media_playlist(
     dest: &Path,
     recording: Arc<Mutex<RecordingFile>>,
     mut options: RecordOptions,
-) -> Result<()> {
+) -> Result<(), RecordError> {
     let name_in_recording = format!("{dir}index.m3u8");
     let dest = dest.join(dir);
     fs::create_dir_all(&dest).await?;
@@ -212,8 +227,9 @@ async fn record_media_playlist(
             playlist
         } else {
             let raw_playlist = download_playlist(client, url).await?;
-            parse_media_playlist_res(raw_playlist.as_bytes())
-                .map_err(|_| anyhow!("Error while parsing media playlist"))?
+            parse_media_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
+                RecordError::Parse(anyhow!("Error while parsing media playlist: {e}"))
+            })?
         };
         let now = Instant::now();
         let playlist_time = Utc::now();
@@ -267,18 +283,21 @@ async fn record_media_playlist(
     Ok(())
 }
 
-async fn download_playlist(client: &Client, url: &Url) -> Result<String> {
+async fn download_playlist(client: &Client, url: &Url) -> Result<String, RecordError> {
     client
         .get(url.clone())
         .send()
         .await
-        .with_context(|| format!("Failed to download playlist at {url}"))?
+        .map_err(|e| RecordError::Io(io::Error::other(e)))?
         .text()
         .await
-        .with_context(|| format!("Failed to download playlist at {url}"))
+        .map_err(|e| RecordError::Io(io::Error::other(e)))
 }
 
-async fn write_master_playlist(file_path: &Path, playlist: &MasterPlaylist) -> Result<()> {
+async fn write_master_playlist(
+    file_path: &Path,
+    playlist: &MasterPlaylist,
+) -> Result<(), RecordError> {
     let mut playlist_file = fs::File::create(file_path).await?;
     let mut buffer = vec![];
     playlist.write_to(&mut buffer)?;
@@ -286,7 +305,10 @@ async fn write_master_playlist(file_path: &Path, playlist: &MasterPlaylist) -> R
     Ok(())
 }
 
-async fn write_media_playlist(file_path: &Path, playlist: &MediaPlaylist) -> Result<()> {
+async fn write_media_playlist(
+    file_path: &Path,
+    playlist: &MediaPlaylist,
+) -> Result<(), RecordError> {
     let mut playlist_file = fs::File::create(file_path).await?;
     let mut buffer = vec![];
     playlist.write_to(&mut buffer)?;
@@ -323,7 +345,7 @@ async fn download_segments(
     media_segments: &[MediaSegment],
     dir: &Path,
     max_concurrent_downloads: usize,
-) -> Result<()> {
+) -> Result<(), RecordError> {
     let segment_tasks = media_segments
         .iter()
         .flat_map(|segment| make_segment_download_tasks(client, dir, segment));
@@ -338,7 +360,7 @@ fn make_segment_download_tasks<'a>(
     client: &'a Client,
     dir: &'a Path,
     segment: &'a MediaSegment,
-) -> Vec<BoxFuture<'a, Result<()>>> {
+) -> Vec<BoxFuture<'a, Result<(), RecordError>>> {
     let mut tasks = Vec::with_capacity(3);
     tasks.push(download_segment(client, segment, dir).boxed());
     if let Some(key) = segment.key.as_ref() {
@@ -350,12 +372,16 @@ fn make_segment_download_tasks<'a>(
     tasks
 }
 
-async fn download_segment(client: &Client, media_segment: &MediaSegment, dir: &Path) -> Result<()> {
+async fn download_segment(
+    client: &Client,
+    media_segment: &MediaSegment,
+    dir: &Path,
+) -> Result<(), RecordError> {
     let segment_url = media_segment
         .unknown_tags
         .iter()
         .find(|ext_tag| ext_tag.tag == ORIGINAL_URI)
-        .with_context(|| format!("Expected original URL in #EXT-{ORIGINAL_URI}"))?
+        .ok_or_else(|| RecordError::Parse(anyhow!("Expected original URL in #EXT-ORIGINAL_URI")))?
         .rest
         .as_ref()
         .unwrap();
@@ -364,7 +390,10 @@ async fn download_segment(client: &Client, media_segment: &MediaSegment, dir: &P
         .iter()
         .find(|ext_tag| ext_tag.tag == ORIGINAL_BYTE_RANGE)
         .map(|ext_tag| ext_tag.rest.as_ref().unwrap().parse())
-        .transpose()?;
+        .transpose()
+        .map_err(|e| {
+            RecordError::Parse(anyhow!("Invalid byte range in #X-ORIGINAL-BYTE-RANGE: {e}"))
+        })?;
     let segment_file = &media_segment.uri;
     download_file(client, segment_url, segment_byte_range, segment_file, dir).await
 }
@@ -374,7 +403,7 @@ async fn download_key(
     key: &Key,
     media_segment: &MediaSegment,
     dir: &Path,
-) -> Result<()> {
+) -> Result<(), RecordError> {
     let Some(original_key_tag) = &media_segment
         .unknown_tags
         .iter()
@@ -392,7 +421,7 @@ async fn download_map(
     map: &Map,
     media_segment: &MediaSegment,
     dir: &Path,
-) -> Result<()> {
+) -> Result<(), RecordError> {
     let Some(original_map_tag) = &media_segment
         .unknown_tags
         .iter()
@@ -405,7 +434,10 @@ async fn download_map(
         .other_attributes
         .get(ORIGINAL_BYTE_RANGE)
         .map(|byte_range| byte_range.as_str().parse())
-        .transpose()?;
+        .transpose()
+        .map_err(|e| {
+            RecordError::Parse(anyhow!("Invalid byte range in #X-ORIGINAL-BYTE-RANGE: {e}"))
+        })?;
     let map_file = &map.uri;
     download_file(client, map_uri.as_str(), map_byte_range, map_file, dir).await
 }
@@ -416,7 +448,7 @@ async fn download_file(
     byte_range: Option<ByteRange>,
     file_name: &str,
     dir: &Path,
-) -> Result<()> {
+) -> Result<(), RecordError> {
     let absolute_path = dir.join(file_name);
     let mut file = match fs::OpenOptions::new()
         .write(true)
@@ -441,7 +473,10 @@ async fn download_file(
     if let Some(range_header) = range_header {
         request = request.header(reqwest::header::RANGE, range_header);
     }
-    let response = request.send().await?;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| RecordError::Io(io::Error::other(e)))?;
     let response_stream = response.bytes_stream().map_err(io::Error::other);
     let mut response_stream = StreamReader::new(response_stream);
     tokio::io::copy_buf(&mut response_stream, &mut file).await?;

@@ -1,12 +1,11 @@
-use std::collections::HashMap;
-use std::path::Path;
-
-use anyhow::Result;
+use crate::record::RecordError;
+use crate::shared::{ByteRange, hex};
+use anyhow::anyhow;
 use m3u8_rs::*;
 use sha1::{Digest, Sha1};
+use std::collections::HashMap;
+use std::path::Path;
 use url::Url;
-
-use crate::shared::{ByteRange, hex};
 
 pub const ORIGINAL_URI: &str = "X-ORIGINAL-URI";
 pub const ORIGINAL_MAP_URI: &str = "X-ORIGINAL-MAP-URI";
@@ -20,7 +19,7 @@ pub fn rewrite_media_playlist(
     url: &Url,
     media_playlist: &mut MediaPlaylist,
     last_segment_ext: &mut Option<String>,
-) -> Result<()> {
+) -> Result<(), RecordError> {
     // Rewrite segments
     let mut next_byte_range_start = 0u64;
     for (i, segment) in media_playlist.segments.iter_mut().enumerate() {
@@ -43,8 +42,10 @@ fn rewrite_segment(
     playlist_url: &Url,
     last_segment_ext: &mut Option<String>,
     next_byte_range_start: &mut u64,
-) -> Result<()> {
-    let segment_url = playlist_url.join(&media_segment.uri)?;
+) -> Result<(), RecordError> {
+    let segment_url = playlist_url
+        .join(&media_segment.uri)
+        .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", &media_segment.uri)))?;
     let file_ext = get_or_update_file_ext(&segment_url, last_segment_ext);
     let file_name = format!("segment-{media_sequence_number}.{file_ext}");
     // Put original URL and byte range in extra tag, and replace segment URL with rewritten path
@@ -79,14 +80,20 @@ fn rewrite_segment(
     Ok(())
 }
 
-fn rewrite_key(key: &mut Key, playlist_url: &Url, unknown_tags: &mut Vec<ExtTag>) -> Result<()> {
+fn rewrite_key(
+    key: &mut Key,
+    playlist_url: &Url,
+    unknown_tags: &mut Vec<ExtTag>,
+) -> Result<(), RecordError> {
     if key.method != KeyMethod::AES128 {
         return Ok(());
     }
     let Some(key_uri) = key.uri.as_mut() else {
         return Ok(());
     };
-    let key_url = playlist_url.join(key_uri)?;
+    let key_url = playlist_url
+        .join(key_uri)
+        .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", key_uri)))?;
     if !matches!(key_url.scheme(), "http" | "https") {
         return Ok(());
     }
@@ -108,8 +115,10 @@ fn rewrite_map(
     playlist_url: &Url,
     next_byte_range_start: &mut u64,
     unknown_tags: &mut Vec<ExtTag>,
-) -> Result<()> {
-    let map_url = playlist_url.join(&map.uri)?;
+) -> Result<(), RecordError> {
+    let map_url = playlist_url
+        .join(&map.uri)
+        .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", &map.uri)))?;
     // Put original URL in extra tag, and rewrite map URL as relative path
     unknown_tags.push(ExtTag {
         tag: ORIGINAL_MAP_URI.to_string(),
