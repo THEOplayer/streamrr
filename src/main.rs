@@ -2,12 +2,12 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use tokio::spawn;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use streamrr::record::RecordOptions;
-use streamrr::shared::{
-    AbortError, MediaSelect, VariantSelect, VariantSelectOptions, abort_on_ctrlc,
-};
+use streamrr::record::{RecordError, RecordOptions};
+use streamrr::replay::ReplayError;
+use streamrr::shared::{MediaSelect, VariantSelect, VariantSelectOptions, abort_on_ctrlc};
 
 /// Record and replay HLS streams.
 #[derive(Parser)]
@@ -123,12 +123,16 @@ async fn main() {
                 video,
                 subtitle,
             };
-            let record_task = spawn(async move {
-                streamrr::record::record(&manifest_url, &recording_path, options).await
-            });
-            match abort_on_ctrlc(record_task).await {
+            let token = CancellationToken::new();
+            let record_task = {
+                let token = token.clone();
+                spawn(async move {
+                    streamrr::record::record(&manifest_url, &recording_path, options, token).await
+                })
+            };
+            match abort_on_ctrlc(record_task, token, RecordError::Cancelled).await {
                 Ok(()) => {}
-                Err(AbortError::Join(e)) if e.is_cancelled() => println!("Stopped recording."),
+                Err(RecordError::Cancelled) => println!("Stopped recording."),
                 Err(e) => {
                     eprintln!("{e}");
                     std::process::exit(1);
@@ -139,11 +143,14 @@ async fn main() {
             recording_path,
             port,
         } => {
-            let replay_task =
-                spawn(async move { streamrr::replay::replay(&recording_path, port).await });
-            match abort_on_ctrlc(replay_task).await {
+            let token = CancellationToken::new();
+            let replay_task = {
+                let token = token.clone();
+                spawn(async move { streamrr::replay::replay(&recording_path, port, token).await })
+            };
+            match abort_on_ctrlc(replay_task, token, ReplayError::Cancelled).await {
                 Ok(()) => {}
-                Err(AbortError::Join(e)) if e.is_cancelled() => println!("Stopped replaying."),
+                Err(ReplayError::Cancelled) => println!("Stopped replaying."),
                 Err(e) => {
                     eprintln!("{e}");
                     std::process::exit(1);

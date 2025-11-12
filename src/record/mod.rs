@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio::time::sleep_until;
 use tokio_util::io::StreamReader;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::shared::{ByteRange, MediaSelect, Recording, VariantSelectOptions};
@@ -45,20 +46,37 @@ pub enum RecordError {
     Cancelled,
 }
 
-pub async fn record(url: &Url, dest: &Path, options: RecordOptions) -> Result<(), RecordError> {
+pub async fn record(
+    url: &Url,
+    dest: &Path,
+    options: RecordOptions,
+    token: CancellationToken,
+) -> Result<(), RecordError> {
     fs::create_dir_all(dest).await?;
     let recording_path = dest.join("recording.json");
     let recording = RecordingFile::new(&recording_path).await?;
     let recording = Arc::new(Mutex::new(recording));
     // Download initial playlist
     let client = Client::new();
-    let raw_playlist = download_playlist(&client, url).await?;
+    let raw_playlist = token
+        .run_until_cancelled(download_playlist(&client, url))
+        .await
+        .ok_or(RecordError::Cancelled)??;
     let initial_playlist = parse_playlist_res(raw_playlist.as_bytes())
         .map_err(|e| RecordError::Parse(anyhow!("Error while parsing playlist: {e}")))?;
     match initial_playlist {
         Playlist::MasterPlaylist(master_playlist) => {
             // Master playlist
-            record_master_playlist(&client, url, dest, recording, options, master_playlist).await?;
+            record_master_playlist(
+                &client,
+                url,
+                dest,
+                recording,
+                options,
+                master_playlist,
+                token,
+            )
+            .await?;
         }
         Playlist::MediaPlaylist(media_playlist) => {
             // Media playlist only
@@ -70,6 +88,7 @@ pub async fn record(url: &Url, dest: &Path, options: RecordOptions) -> Result<()
                 dest,
                 recording,
                 options,
+                token,
             )
             .await?;
         }
@@ -84,6 +103,7 @@ async fn record_master_playlist(
     recording: Arc<Mutex<RecordingFile>>,
     options: RecordOptions,
     master_playlist: MasterPlaylist,
+    token: CancellationToken,
 ) -> Result<(), RecordError> {
     let mut new_master_playlist = master_playlist.clone();
     // Select variant streams
@@ -154,6 +174,7 @@ async fn record_master_playlist(
             QuotedOrUnquoted::Quoted(variant_url.as_str().to_string()),
         );
         variant.uri = format!("{variant_dir}index.m3u8");
+        let token = token.clone();
         join_set.spawn(async move {
             record_media_playlist(
                 &client,
@@ -163,6 +184,7 @@ async fn record_master_playlist(
                 &dest,
                 recording,
                 options,
+                token,
             )
             .await
         });
@@ -183,9 +205,10 @@ async fn record_master_playlist(
             QuotedOrUnquoted::Quoted(media_url.as_str().to_string()),
         );
         media.uri = Some(format!("{media_dir}index.m3u8"));
+        let token = token.clone();
         join_set.spawn(async move {
             record_media_playlist(
-                &client, &media_url, &media_dir, None, &dest, recording, options,
+                &client, &media_url, &media_dir, None, &dest, recording, options, token,
             )
             .await
         });
@@ -213,6 +236,7 @@ async fn record_media_playlist(
     dest: &Path,
     recording: Arc<Mutex<RecordingFile>>,
     mut options: RecordOptions,
+    token: CancellationToken,
 ) -> Result<(), RecordError> {
     let name_in_recording = format!("{dir}index.m3u8");
     let dest = dest.join(dir);
@@ -226,7 +250,10 @@ async fn record_media_playlist(
         let mut media_playlist = if let Some(playlist) = initial_playlist.take() {
             playlist
         } else {
-            let raw_playlist = download_playlist(client, url).await?;
+            let raw_playlist = token
+                .run_until_cancelled(download_playlist(client, url))
+                .await
+                .ok_or(RecordError::Cancelled)??;
             parse_media_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
                 RecordError::Parse(anyhow!("Error while parsing media playlist: {e}"))
             })?
@@ -270,6 +297,7 @@ async fn record_media_playlist(
             &media_playlist.segments,
             &dest,
             MAX_CONCURRENT_DOWNLOADS,
+            token.clone(),
         )
         .await?;
         // Refresh playlist
@@ -277,7 +305,10 @@ async fn record_media_playlist(
             break;
         }
         let next_refresh_time = now + Duration::from_secs(media_playlist.target_duration);
-        sleep_until(next_refresh_time.into()).await;
+        token
+            .run_until_cancelled(sleep_until(next_refresh_time.into()))
+            .await
+            .ok_or(RecordError::Cancelled)?;
         previous_playlist = Some(media_playlist);
     }
     Ok(())
@@ -345,10 +376,11 @@ async fn download_segments(
     media_segments: &[MediaSegment],
     dir: &Path,
     max_concurrent_downloads: usize,
+    token: CancellationToken,
 ) -> Result<(), RecordError> {
     let segment_tasks = media_segments
         .iter()
-        .flat_map(|segment| make_segment_download_tasks(client, dir, segment));
+        .flat_map(|segment| make_segment_download_tasks(client, dir, segment, token.clone()));
     iter(segment_tasks)
         .boxed() // https://github.com/rust-lang/rust/issues/104382
         .buffered(max_concurrent_downloads)
@@ -360,14 +392,15 @@ fn make_segment_download_tasks<'a>(
     client: &'a Client,
     dir: &'a Path,
     segment: &'a MediaSegment,
+    token: CancellationToken,
 ) -> Vec<BoxFuture<'a, Result<(), RecordError>>> {
     let mut tasks = Vec::with_capacity(3);
-    tasks.push(download_segment(client, segment, dir).boxed());
+    tasks.push(download_segment(client, segment, dir, token.clone()).boxed());
     if let Some(key) = segment.key.as_ref() {
-        tasks.push(download_key(client, key, segment, dir).boxed());
+        tasks.push(download_key(client, key, segment, dir, token.clone()).boxed());
     }
     if let Some(map) = segment.map.as_ref() {
-        tasks.push(download_map(client, map, segment, dir).boxed());
+        tasks.push(download_map(client, map, segment, dir, token).boxed());
     }
     tasks
 }
@@ -376,6 +409,7 @@ async fn download_segment(
     client: &Client,
     media_segment: &MediaSegment,
     dir: &Path,
+    token: CancellationToken,
 ) -> Result<(), RecordError> {
     let segment_url = media_segment
         .unknown_tags
@@ -395,7 +429,15 @@ async fn download_segment(
             RecordError::Parse(anyhow!("Invalid byte range in #X-ORIGINAL-BYTE-RANGE: {e}"))
         })?;
     let segment_file = &media_segment.uri;
-    download_file(client, segment_url, segment_byte_range, segment_file, dir).await
+    download_file(
+        client,
+        segment_url,
+        segment_byte_range,
+        segment_file,
+        dir,
+        token,
+    )
+    .await
 }
 
 async fn download_key(
@@ -403,6 +445,7 @@ async fn download_key(
     key: &Key,
     media_segment: &MediaSegment,
     dir: &Path,
+    token: CancellationToken,
 ) -> Result<(), RecordError> {
     let Some(original_key_tag) = &media_segment
         .unknown_tags
@@ -413,7 +456,15 @@ async fn download_key(
     };
     let key_uri = original_key_tag.rest.as_ref().unwrap();
     let key_file = key.uri.as_ref().unwrap();
-    download_file(client, key_uri.as_str(), None, key_file.as_str(), dir).await
+    download_file(
+        client,
+        key_uri.as_str(),
+        None,
+        key_file.as_str(),
+        dir,
+        token,
+    )
+    .await
 }
 
 async fn download_map(
@@ -421,6 +472,7 @@ async fn download_map(
     map: &Map,
     media_segment: &MediaSegment,
     dir: &Path,
+    token: CancellationToken,
 ) -> Result<(), RecordError> {
     let Some(original_map_tag) = &media_segment
         .unknown_tags
@@ -439,7 +491,15 @@ async fn download_map(
             RecordError::Parse(anyhow!("Invalid byte range in #X-ORIGINAL-BYTE-RANGE: {e}"))
         })?;
     let map_file = &map.uri;
-    download_file(client, map_uri.as_str(), map_byte_range, map_file, dir).await
+    download_file(
+        client,
+        map_uri.as_str(),
+        map_byte_range,
+        map_file,
+        dir,
+        token,
+    )
+    .await
 }
 
 async fn download_file(
@@ -448,6 +508,7 @@ async fn download_file(
     byte_range: Option<ByteRange>,
     file_name: &str,
     dir: &Path,
+    token: CancellationToken,
 ) -> Result<(), RecordError> {
     let absolute_path = dir.join(file_name);
     let mut file = match fs::OpenOptions::new()
@@ -473,9 +534,10 @@ async fn download_file(
     if let Some(range_header) = range_header {
         request = request.header(reqwest::header::RANGE, range_header);
     }
-    let response = request
-        .send()
+    let response = token
+        .run_until_cancelled(request.send())
         .await
+        .ok_or(RecordError::Cancelled)?
         .map_err(|e| RecordError::Io(io::Error::other(e)))?;
     let response_stream = response.bytes_stream().map_err(io::Error::other);
     let mut response_stream = StreamReader::new(response_stream);
@@ -543,25 +605,33 @@ mod tests {
         let url = Url::parse("https://a.com/").unwrap();
         let path = Path::new("");
         let client = Client::new();
+        let token = CancellationToken::new();
 
         fn require_send<T: Send>(_t: T) {}
         require_send(download_playlist(&client, &url));
         require_send(write_master_playlist(path, &MasterPlaylist::default()));
         require_send(write_media_playlist(path, &MediaPlaylist::default()));
-        require_send(download_segments(&client, &[], path, 0));
-        require_send(download_segment(&client, &MediaSegment::empty(), path));
+        require_send(download_segments(&client, &[], path, 0, token.clone()));
+        require_send(download_segment(
+            &client,
+            &MediaSegment::empty(),
+            path,
+            token.clone(),
+        ));
         require_send(download_key(
             &client,
             &Key::default(),
             &MediaSegment::empty(),
             path,
+            token.clone(),
         ));
         require_send(download_map(
             &client,
             &Map::default(),
             &MediaSegment::empty(),
             path,
+            token.clone(),
         ));
-        require_send(download_file(&client, "", None, "", path));
+        require_send(download_file(&client, "", None, "", path, token.clone()));
     }
 }

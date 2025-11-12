@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::io;
 use tokio::io::AsyncReadExt;
+use tokio_util::sync::CancellationToken;
 use warp::http::{Response, StatusCode, Uri, header::CONTENT_TYPE};
 use warp::path::{FullPath, Peek, Tail};
 use warp::reject::{Reject, custom};
@@ -32,9 +33,15 @@ pub enum ReplayError {
     InvalidRecording(#[from] serde_json::Error),
     #[error("Missing start time in recording")]
     MissingStartTime,
+    #[error("Cancelled")]
+    Cancelled,
 }
 
-pub async fn replay(recording_path: &Path, port: u16) -> Result<(), ReplayError> {
+pub async fn replay(
+    recording_path: &Path,
+    port: u16,
+    token: CancellationToken,
+) -> Result<(), ReplayError> {
     let recording_path = recording_path.to_owned();
     let raw_recording = fs::read_to_string(recording_path.join("recording.json"))
         .await
@@ -89,7 +96,10 @@ pub async fn replay(recording_path: &Path, port: u16) -> Result<(), ReplayError>
 
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     println!("Replay server listening on http://{address}/");
-    warp::serve(service).run(address).await;
+    token
+        .run_until_cancelled(warp::serve(service).run(address))
+        .await
+        .ok_or(ReplayError::Cancelled)?;
 
     Ok(())
 }

@@ -1,35 +1,29 @@
 use tokio::select;
 use tokio::signal;
-use tokio::task::{JoinError, JoinHandle};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
-#[derive(thiserror::Error, Debug)]
-pub enum AbortError<E> {
-    #[error("io error: {0}")]
-    Io(std::io::Error),
-    #[error("cancelled")]
-    Join(JoinError),
-    #[error(transparent)]
-    Other(E),
-}
-
-pub async fn abort_on_ctrlc<T, E>(mut task: JoinHandle<Result<T, E>>) -> Result<T, AbortError<E>> {
+pub async fn abort_on_ctrlc<T, E>(
+    mut task: JoinHandle<Result<T, E>>,
+    token: CancellationToken,
+    error_on_abort: E,
+) -> Result<T, E> {
     let mut aborted = false;
     let task_handle = task.abort_handle();
     loop {
         select! {
             result = &mut task => return match result {
-                Ok(Ok(result)) => Ok(result),
-                Ok(Err(err)) => Err(AbortError::Other(err)),
-                Err(err) => Err(AbortError::Join(err))
+                Ok(result) => result,
+                Err(_) => Err(error_on_abort)
             },
             _ = signal::ctrl_c() => {
                 if !aborted {
                     // First CTRL-C: stop gracefully.
                     aborted = true;
-                    task_handle.abort();
+                    token.cancel();
                 } else {
                     // Second CTRL-C: force stop.
-                    std::process::exit(1);
+                    task_handle.abort()
                 }
             }
         }
