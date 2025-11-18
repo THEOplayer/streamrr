@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 use std::fmt::Write;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -39,6 +39,7 @@ pub enum ReplayError {
 
 pub async fn replay(
     recording_path: &Path,
+    address: IpAddr,
     port: u16,
     token: CancellationToken,
 ) -> Result<(), ReplayError> {
@@ -94,7 +95,7 @@ pub async fn replay(
 
     let service = playlist.or(segments).with(cors).recover(handle_rejection);
 
-    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let address = SocketAddr::from((address, port));
     println!("Replay server listening on http://{address}/");
     token
         .run_until_cancelled(warp::serve(service).run(address))

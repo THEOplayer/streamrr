@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -76,6 +77,9 @@ enum CliCommand {
         /// The directory path of the recording of an HLS stream created by record.
         #[arg(value_name = "PATH")]
         recording_path: PathBuf,
+        /// The address on which to run the server.
+        #[arg(short = 'a', long, value_name = "ADDRESS", default_value_t = IpAddr::from([127, 0, 0, 1]))]
+        address: IpAddr,
         /// The port on which to run the server.
         #[arg(short = 'p', long, value_name = "PORT", default_value_t = 8080)]
         port: u16,
@@ -141,12 +145,15 @@ async fn main() {
         }
         CliCommand::Replay {
             recording_path,
+            address,
             port,
         } => {
             let token = CancellationToken::new();
             let replay_task = {
                 let token = token.clone();
-                spawn(async move { streamrr::replay::replay(&recording_path, port, token).await })
+                spawn(async move {
+                    streamrr::replay::replay(&recording_path, address, port, token).await
+                })
             };
             match abort_on_ctrlc(replay_task, token, ReplayError::Cancelled).await {
                 Ok(()) => {}
