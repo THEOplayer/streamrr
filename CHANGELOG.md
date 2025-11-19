@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 (2025-11-19)
 
 - Added `--address` flag to `replay` command to set the local server's IP address.
 - Fixed an issue where `#EXT-X-MAP` and `#EXT-X-KEY` files were re-downloaded when they re-appear on a later segment.

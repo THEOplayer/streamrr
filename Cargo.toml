@@ -1,6 +1,6 @@
 [package]
 name = "streamrr"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Dolby Laboratories, Inc."]
 edition = "2024"
 description = "Record and replay HLS streams."
