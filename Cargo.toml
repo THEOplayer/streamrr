@@ -28,3 +28,14 @@ thiserror = "2.0.17"
 
 [dev-dependencies]
 insta = "1.43.2"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[package.metadata.wix]
+upgrade-guid = "60D9DB75-840C-4CCD-BA98-78B820024036"
+path-guid = "BD00B2ED-A85D-463F-B1A0-63D437D205A7"
+license = false
+eula = false
