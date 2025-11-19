@@ -1,0 +1,15 @@
+# See: https://github.com/EmbarkStudios/cargo-about/blob/0.8.2/src/licenses/config.rs#L205
+
+# Accepted open-source licenses
+accepted = [
+    "Apache-2.0",
+    "MIT"
+]
+
+# Only list direct runtime dependencies
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+ignore-transitive-dependencies = true
+
+# Ignore private crates (like streamrr itself!)
+private.ignore = true

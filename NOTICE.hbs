@@ -1,0 +1,11 @@
+This software bundles the following third-party libraries:
+
+{{#each crates}}
+ - {{{package.name}}} version {{{package.version}}} ({{#if package.repository}}{{{package.repository}}}{{else}}https://crates.io/crates/{{{package.name}}}{{/if}})  
+   {{#if package.authors}}Author: {{#each package.authors}}{{{this}}}{{#unless @last}}, {{/unless}}{{/each}}  
+   {{/if}}License: {{{license}}}
+{{/each}}
+
+You may obtain a copy of these licenses at:
+ - https://opensource.org/license/MIT
+ - https://www.apache.org/licenses/LICENSE-2.0
