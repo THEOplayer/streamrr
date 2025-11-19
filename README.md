@@ -4,17 +4,29 @@ Record HLS streams and replay them afterwards.
 
 ## Installation
 
-Prerequisites:
+### Option 1: Install from pre-built release
 
-1. [Install Rust](https://www.rust-lang.org/tools/install)
+1. Download the [latest version from GitHub](https://github.com/THEOplayer/streamrr/releases/latest).  
+   Supported platforms:
+   - [Windows (x86-64)](https://github.com/THEOplayer/streamrr/releases/latest/download/streamrr-x86_64-pc-windows-msvc.zip)
+   - [Linux (x86-64)](https://github.com/THEOplayer/streamrr/releases/latest/download/streamrr-x86_64-unknown-linux-gnu.tar.xz)
+   - [Linux (ARM64)](https://github.com/THEOplayer/streamrr/releases/latest/download/streamrr-aarch64-unknown-linux-gnu.tar.xz)
+   - [macOS (Apple Silicon)](https://github.com/THEOplayer/streamrr/releases/latest/download/streamrr-aarch64-apple-darwin.tar.xz)
+   - Is your platform missing? [Let us know.](https://github.com/THEOplayer/streamrr/issues)
+2. Extract the archive.
+3. Run `streamrr` (or `streamrr.exe` on Windows) from a terminal.
+4. (Optional: add `streamrr` to your `$PATH` to run it from anywhere.)
 
-```bash
-cargo install --git https://github.com/THEOplayer/streamrr.git
-```
+### Option 2: Install from source
 
-This will build the `streamrr` CLI tool, and then add it to your `$PATH`.
+1. [Install Rust.](https://www.rust-lang.org/tools/install)
+2. Run:
+   ```bash
+   cargo install --git https://github.com/THEOplayer/streamrr.git
+   ```
+   This will build the `streamrr` CLI tool, and then add it to your `$PATH`.
+
 If everything goes well, you should now be able to run:
-
 ```bash
 streamrr --help
 ```
