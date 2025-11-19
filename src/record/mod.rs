@@ -228,6 +228,7 @@ async fn record_master_playlist(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn record_media_playlist(
     client: &Client,
     url: &Url,
