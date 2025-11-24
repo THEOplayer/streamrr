@@ -6,6 +6,7 @@ edition = "2024"
 description = "Record and replay HLS streams."
 license = "BSD-3-Clause-Clear"
 repository = "https://github.com/THEOplayer/streamrr"
+publish = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -28,6 +29,10 @@ thiserror = "2.0.17"
 
 [dev-dependencies]
 insta = "1.43.2"
+
+# Enable 'dist' even though publish = false
+[package.metadata.dist]
+dist = true
 
 # The profile that 'dist' will build with
 [profile.dist]
