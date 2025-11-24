@@ -5,7 +5,7 @@ This software bundles the following third-party libraries:
    License: MIT OR Apache-2.0
  - chrono version 0.4.42 (https://github.com/chronotope/chrono)  
    License: MIT OR Apache-2.0
- - clap version 4.5.49 (https://github.com/clap-rs/clap)  
+ - clap version 4.5.52 (https://github.com/clap-rs/clap)  
    License: MIT OR Apache-2.0
  - futures version 0.3.31 (https://github.com/rust-lang/futures-rs)  
    License: MIT OR Apache-2.0
@@ -26,10 +26,13 @@ This software bundles the following third-party libraries:
  - sha1 version 0.10.6 (https://github.com/RustCrypto/hashes)  
    Author: RustCrypto Developers  
    License: MIT OR Apache-2.0
+ - thiserror version 2.0.17 (https://github.com/dtolnay/thiserror)  
+   Author: David Tolnay <dtolnay@gmail.com>  
+   License: MIT OR Apache-2.0
  - tokio version 1.48.0 (https://github.com/tokio-rs/tokio)  
    Author: Tokio Contributors <team@tokio.rs>  
    License: MIT
- - tokio-util version 0.7.16 (https://github.com/tokio-rs/tokio)  
+ - tokio-util version 0.7.17 (https://github.com/tokio-rs/tokio)  
    Author: Tokio Contributors <team@tokio.rs>  
    License: MIT
  - url version 2.5.7 (https://github.com/servo/rust-url)  
