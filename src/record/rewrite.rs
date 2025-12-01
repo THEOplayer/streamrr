@@ -29,149 +29,149 @@ impl<'a> Rewriter<'a> {
         }
     }
 
-pub fn rewrite_media_playlist(
-    &mut self,
-    media_playlist: &mut MediaPlaylist,
-) -> Result<(), RecordError> {
-    // Rewrite segments
-    let mut next_byte_range_start = 0u64;
-    for (i, segment) in media_playlist.segments.iter_mut().enumerate() {
-        let media_sequence_number = media_playlist.media_sequence + (i as u64);
-        self.rewrite_segment(segment, media_sequence_number, &mut next_byte_range_start)?;
-    }
-    remove_unsupported_tags(&mut media_playlist.unknown_tags);
-    Ok(())
-}
-
-fn rewrite_segment(
-    &mut self,
-    media_segment: &mut MediaSegment,
-    media_sequence_number: u64,
-    next_byte_range_start: &mut u64,
-) -> Result<(), RecordError> {
-    let segment_url = self
-        .playlist_url
-        .join(&media_segment.uri)
-        .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", &media_segment.uri)))?;
-    let file_ext = self.get_or_update_file_ext(&segment_url);
-    let file_name = format!("segment-{media_sequence_number}.{file_ext}");
-    // Put original URL and byte range in extra tag, and replace segment URL with rewritten path
-    media_segment.unknown_tags.push(ExtTag {
-        tag: ORIGINAL_URI.to_string(),
-        rest: Some(segment_url.into()),
-    });
-    media_segment.uri = file_name;
-    // Put original byte range in extra tag
-    if let Some(byte_range) = media_segment.byte_range.take() {
-        let byte_range = ByteRange::from_m3u8(&byte_range, *next_byte_range_start);
-        media_segment.unknown_tags.push(ExtTag {
-            tag: ORIGINAL_BYTE_RANGE.to_string(),
-            rest: Some(byte_range.to_string()),
-        });
-        *next_byte_range_start = byte_range.offset + byte_range.length;
-    } else {
-        *next_byte_range_start = 0;
-    }
-    if let Some(key) = media_segment.key.as_mut() {
-        self.rewrite_key(key, &mut media_segment.unknown_tags)?;
-    }
-    if let Some(map) = media_segment.map.as_mut() {
-        self.rewrite_map(map, next_byte_range_start, &mut media_segment.unknown_tags)?;
-    }
-    remove_unsupported_tags(&mut media_segment.unknown_tags);
-    Ok(())
-}
-
-fn rewrite_key(
-    &mut self,
-    key: &mut Key,
-    unknown_tags: &mut Vec<ExtTag>,
-) -> Result<(), RecordError> {
-    if key.method != KeyMethod::AES128 {
-        return Ok(());
-    }
-    let Some(key_uri) = key.uri.as_mut() else {
-        return Ok(());
-    };
-    let key_url = self
-        .playlist_url
-        .join(key_uri)
-        .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", key_uri)))?;
-    if !matches!(key_url.scheme(), "http" | "https") {
-        return Ok(());
-    }
-    // Put original URL in extra tag, and rewrite key URL as relative path
-    unknown_tags.push(ExtTag {
-        tag: ORIGINAL_KEY_URI.to_string(),
-        rest: Some(key_url.as_str().to_string()),
-    });
-    // Use a hash of the key URL as filename.
-    // Don't use the media sequence number, since it's likely that this key will appear
-    // on a different segment in a future media playlist.
-    let key_url_hash = Sha1::digest(key_url.as_str().as_bytes());
-    *key_uri = format!("key-{}.bin", hex(key_url_hash));
-    Ok(())
-}
-
-fn rewrite_map(
-    &mut self,
-    map: &mut Map,
-    next_byte_range_start: &mut u64,
-    unknown_tags: &mut Vec<ExtTag>,
-) -> Result<(), RecordError> {
-    let map_url = self
-        .playlist_url
-        .join(&map.uri)
-        .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", &map.uri)))?;
-    // Put original URL in extra tag, and rewrite map URL as relative path
-    unknown_tags.push(ExtTag {
-        tag: ORIGINAL_MAP_URI.to_string(),
-        rest: Some(map_url.as_str().to_string()),
-    });
-    // Put original byte range in extra attribute
-    Self::rewrite_byte_range_in_attribute(
-        &mut map.byte_range,
-        &mut map.other_attributes,
-        next_byte_range_start,
-    );
-    // Use a hash of the key URL as filename.
-    // Don't use the media sequence number, since it's likely that this key will appear
-    // on a different segment in a future media playlist.
-    let map_url_hash = Sha1::digest(map_url.as_str().as_bytes());
-    let file_ext = url_file_extension(&map_url).unwrap_or(DEFAULT_FILE_EXT);
-    let file_name = format!("init-{}.{}", hex(map_url_hash), file_ext);
-    map.uri = file_name;
-    Ok(())
-}
-
-fn rewrite_byte_range_in_attribute(
-    byte_range: &mut Option<m3u8_rs::ByteRange>,
-    other_attributes: &mut HashMap<String, QuotedOrUnquoted>,
-    next_byte_range_start: &mut u64,
-) {
-    if let Some(byte_range) = byte_range.take() {
-        let byte_range = ByteRange::from_m3u8(&byte_range, *next_byte_range_start);
-        other_attributes.insert(
-            ORIGINAL_BYTE_RANGE.to_string(),
-            QuotedOrUnquoted::Quoted(byte_range.to_string()),
-        );
-        *next_byte_range_start = byte_range.offset + byte_range.length;
-    } else {
-        *next_byte_range_start = 0;
-    }
-}
-
-fn get_or_update_file_ext(&mut self, url: &Url) -> String {
-    match (url_file_extension(url), &self.last_segment_ext) {
-        (Some(ext), _) => {
-            let ext = ext.to_owned();
-            self.last_segment_ext = Some(ext.clone());
-            ext
+    pub fn rewrite_media_playlist(
+        &mut self,
+        media_playlist: &mut MediaPlaylist,
+    ) -> Result<(), RecordError> {
+        // Rewrite segments
+        let mut next_byte_range_start = 0u64;
+        for (i, segment) in media_playlist.segments.iter_mut().enumerate() {
+            let media_sequence_number = media_playlist.media_sequence + (i as u64);
+            self.rewrite_segment(segment, media_sequence_number, &mut next_byte_range_start)?;
         }
-        (None, Some(last_ext)) => last_ext.clone(),
-        (None, None) => DEFAULT_FILE_EXT.to_owned(),
+        remove_unsupported_tags(&mut media_playlist.unknown_tags);
+        Ok(())
     }
-}
+
+    fn rewrite_segment(
+        &mut self,
+        media_segment: &mut MediaSegment,
+        media_sequence_number: u64,
+        next_byte_range_start: &mut u64,
+    ) -> Result<(), RecordError> {
+        let segment_url = self
+            .playlist_url
+            .join(&media_segment.uri)
+            .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", &media_segment.uri)))?;
+        let file_ext = self.get_or_update_file_ext(&segment_url);
+        let file_name = format!("segment-{media_sequence_number}.{file_ext}");
+        // Put original URL and byte range in extra tag, and replace segment URL with rewritten path
+        media_segment.unknown_tags.push(ExtTag {
+            tag: ORIGINAL_URI.to_string(),
+            rest: Some(segment_url.into()),
+        });
+        media_segment.uri = file_name;
+        // Put original byte range in extra tag
+        if let Some(byte_range) = media_segment.byte_range.take() {
+            let byte_range = ByteRange::from_m3u8(&byte_range, *next_byte_range_start);
+            media_segment.unknown_tags.push(ExtTag {
+                tag: ORIGINAL_BYTE_RANGE.to_string(),
+                rest: Some(byte_range.to_string()),
+            });
+            *next_byte_range_start = byte_range.offset + byte_range.length;
+        } else {
+            *next_byte_range_start = 0;
+        }
+        if let Some(key) = media_segment.key.as_mut() {
+            self.rewrite_key(key, &mut media_segment.unknown_tags)?;
+        }
+        if let Some(map) = media_segment.map.as_mut() {
+            self.rewrite_map(map, next_byte_range_start, &mut media_segment.unknown_tags)?;
+        }
+        remove_unsupported_tags(&mut media_segment.unknown_tags);
+        Ok(())
+    }
+
+    fn rewrite_key(
+        &mut self,
+        key: &mut Key,
+        unknown_tags: &mut Vec<ExtTag>,
+    ) -> Result<(), RecordError> {
+        if key.method != KeyMethod::AES128 {
+            return Ok(());
+        }
+        let Some(key_uri) = key.uri.as_mut() else {
+            return Ok(());
+        };
+        let key_url = self
+            .playlist_url
+            .join(key_uri)
+            .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", key_uri)))?;
+        if !matches!(key_url.scheme(), "http" | "https") {
+            return Ok(());
+        }
+        // Put original URL in extra tag, and rewrite key URL as relative path
+        unknown_tags.push(ExtTag {
+            tag: ORIGINAL_KEY_URI.to_string(),
+            rest: Some(key_url.as_str().to_string()),
+        });
+        // Use a hash of the key URL as filename.
+        // Don't use the media sequence number, since it's likely that this key will appear
+        // on a different segment in a future media playlist.
+        let key_url_hash = Sha1::digest(key_url.as_str().as_bytes());
+        *key_uri = format!("key-{}.bin", hex(key_url_hash));
+        Ok(())
+    }
+
+    fn rewrite_map(
+        &mut self,
+        map: &mut Map,
+        next_byte_range_start: &mut u64,
+        unknown_tags: &mut Vec<ExtTag>,
+    ) -> Result<(), RecordError> {
+        let map_url = self
+            .playlist_url
+            .join(&map.uri)
+            .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", &map.uri)))?;
+        // Put original URL in extra tag, and rewrite map URL as relative path
+        unknown_tags.push(ExtTag {
+            tag: ORIGINAL_MAP_URI.to_string(),
+            rest: Some(map_url.as_str().to_string()),
+        });
+        // Put original byte range in extra attribute
+        Self::rewrite_byte_range_in_attribute(
+            &mut map.byte_range,
+            &mut map.other_attributes,
+            next_byte_range_start,
+        );
+        // Use a hash of the key URL as filename.
+        // Don't use the media sequence number, since it's likely that this key will appear
+        // on a different segment in a future media playlist.
+        let map_url_hash = Sha1::digest(map_url.as_str().as_bytes());
+        let file_ext = url_file_extension(&map_url).unwrap_or(DEFAULT_FILE_EXT);
+        let file_name = format!("init-{}.{}", hex(map_url_hash), file_ext);
+        map.uri = file_name;
+        Ok(())
+    }
+
+    fn rewrite_byte_range_in_attribute(
+        byte_range: &mut Option<m3u8_rs::ByteRange>,
+        other_attributes: &mut HashMap<String, QuotedOrUnquoted>,
+        next_byte_range_start: &mut u64,
+    ) {
+        if let Some(byte_range) = byte_range.take() {
+            let byte_range = ByteRange::from_m3u8(&byte_range, *next_byte_range_start);
+            other_attributes.insert(
+                ORIGINAL_BYTE_RANGE.to_string(),
+                QuotedOrUnquoted::Quoted(byte_range.to_string()),
+            );
+            *next_byte_range_start = byte_range.offset + byte_range.length;
+        } else {
+            *next_byte_range_start = 0;
+        }
+    }
+
+    fn get_or_update_file_ext(&mut self, url: &Url) -> String {
+        match (url_file_extension(url), &self.last_segment_ext) {
+            (Some(ext), _) => {
+                let ext = ext.to_owned();
+                self.last_segment_ext = Some(ext.clone());
+                ext
+            }
+            (None, Some(last_ext)) => last_ext.clone(),
+            (None, None) => DEFAULT_FILE_EXT.to_owned(),
+        }
+    }
 }
 
 pub fn remove_segments_from_start(media_playlist: &mut MediaPlaylist, lowest_media_sequence: u64) {
