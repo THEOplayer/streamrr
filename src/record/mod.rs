@@ -40,6 +40,8 @@ pub enum RecordError {
     Config(&'static str),
     #[error("parse error: {0}")]
     Parse(#[source] anyhow::Error),
+    #[error("rewrite error: {0}")]
+    Rewrite(#[from] RewriteError),
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
     #[error("cancelled")]
