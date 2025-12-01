@@ -19,14 +19,14 @@ const DEFAULT_FILE_EXT: &str = "ts";
 #[derive(Debug)]
 pub struct Rewriter<'a> {
     playlist_url: &'a Url,
-    last_segment_ext: Option<String>,
+    last_segment_ext: String,
 }
 
 impl<'a> Rewriter<'a> {
     pub fn new(playlist_url: &'a Url) -> Self {
         Self {
             playlist_url,
-            last_segment_ext: None,
+            last_segment_ext: DEFAULT_FILE_EXT.to_string(),
         }
     }
 
@@ -162,16 +162,14 @@ impl<'a> Rewriter<'a> {
         }
     }
 
-    fn get_or_update_file_ext(&mut self, url: &Url) -> String {
-        match (url_file_extension(url), &self.last_segment_ext) {
-            (Some(ext), _) => {
-                let ext = ext.to_owned();
-                self.last_segment_ext = Some(ext.clone());
-                ext
-            }
-            (None, Some(last_ext)) => last_ext.clone(),
-            (None, None) => DEFAULT_FILE_EXT.to_owned(),
+    fn get_or_update_file_ext(&mut self, url: &Url) -> &str {
+        if let Some(ext) = url_file_extension(url)
+            && ext != self.last_segment_ext
+        {
+            self.last_segment_ext = ext.to_string();
+            debug_assert!(ext == self.last_segment_ext);
         }
+        &self.last_segment_ext
     }
 }
 
