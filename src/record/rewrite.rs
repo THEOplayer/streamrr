@@ -16,38 +16,44 @@ pub const ORIGINAL_RENDITION_REPORT: &str = "X-ORIGINAL-RENDITION-REPORT";
 
 const DEFAULT_FILE_EXT: &str = "ts";
 
+pub struct Rewriter<'a> {
+    playlist_url: &'a Url,
+    last_segment_ext: Option<String>,
+}
+
+impl<'a> Rewriter<'a> {
+    pub fn new(playlist_url: &'a Url) -> Self {
+        Self {
+            playlist_url,
+            last_segment_ext: None,
+        }
+    }
+
 pub fn rewrite_media_playlist(
-    url: &Url,
+    &mut self,
     media_playlist: &mut MediaPlaylist,
-    last_segment_ext: &mut Option<String>,
 ) -> Result<(), RecordError> {
     // Rewrite segments
     let mut next_byte_range_start = 0u64;
     for (i, segment) in media_playlist.segments.iter_mut().enumerate() {
         let media_sequence_number = media_playlist.media_sequence + (i as u64);
-        rewrite_segment(
-            segment,
-            media_sequence_number,
-            url,
-            last_segment_ext,
-            &mut next_byte_range_start,
-        )?;
+        self.rewrite_segment(segment, media_sequence_number, &mut next_byte_range_start)?;
     }
     remove_unsupported_tags(&mut media_playlist.unknown_tags);
     Ok(())
 }
 
 fn rewrite_segment(
+    &mut self,
     media_segment: &mut MediaSegment,
     media_sequence_number: u64,
-    playlist_url: &Url,
-    last_segment_ext: &mut Option<String>,
     next_byte_range_start: &mut u64,
 ) -> Result<(), RecordError> {
-    let segment_url = playlist_url
+    let segment_url = self
+        .playlist_url
         .join(&media_segment.uri)
         .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", &media_segment.uri)))?;
-    let file_ext = get_or_update_file_ext(&segment_url, last_segment_ext);
+    let file_ext = self.get_or_update_file_ext(&segment_url);
     let file_name = format!("segment-{media_sequence_number}.{file_ext}");
     // Put original URL and byte range in extra tag, and replace segment URL with rewritten path
     media_segment.unknown_tags.push(ExtTag {
@@ -67,23 +73,18 @@ fn rewrite_segment(
         *next_byte_range_start = 0;
     }
     if let Some(key) = media_segment.key.as_mut() {
-        rewrite_key(key, playlist_url, &mut media_segment.unknown_tags)?;
+        self.rewrite_key(key, &mut media_segment.unknown_tags)?;
     }
     if let Some(map) = media_segment.map.as_mut() {
-        rewrite_map(
-            map,
-            playlist_url,
-            next_byte_range_start,
-            &mut media_segment.unknown_tags,
-        )?;
+        self.rewrite_map(map, next_byte_range_start, &mut media_segment.unknown_tags)?;
     }
     remove_unsupported_tags(&mut media_segment.unknown_tags);
     Ok(())
 }
 
 fn rewrite_key(
+    &mut self,
     key: &mut Key,
-    playlist_url: &Url,
     unknown_tags: &mut Vec<ExtTag>,
 ) -> Result<(), RecordError> {
     if key.method != KeyMethod::AES128 {
@@ -92,7 +93,8 @@ fn rewrite_key(
     let Some(key_uri) = key.uri.as_mut() else {
         return Ok(());
     };
-    let key_url = playlist_url
+    let key_url = self
+        .playlist_url
         .join(key_uri)
         .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", key_uri)))?;
     if !matches!(key_url.scheme(), "http" | "https") {
@@ -112,12 +114,13 @@ fn rewrite_key(
 }
 
 fn rewrite_map(
+    &mut self,
     map: &mut Map,
-    playlist_url: &Url,
     next_byte_range_start: &mut u64,
     unknown_tags: &mut Vec<ExtTag>,
 ) -> Result<(), RecordError> {
-    let map_url = playlist_url
+    let map_url = self
+        .playlist_url
         .join(&map.uri)
         .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", &map.uri)))?;
     // Put original URL in extra tag, and rewrite map URL as relative path
@@ -126,7 +129,7 @@ fn rewrite_map(
         rest: Some(map_url.as_str().to_string()),
     });
     // Put original byte range in extra attribute
-    rewrite_byte_range_in_attribute(
+    Self::rewrite_byte_range_in_attribute(
         &mut map.byte_range,
         &mut map.other_attributes,
         next_byte_range_start,
@@ -156,6 +159,19 @@ fn rewrite_byte_range_in_attribute(
     } else {
         *next_byte_range_start = 0;
     }
+}
+
+fn get_or_update_file_ext(&mut self, url: &Url) -> String {
+    match (url_file_extension(url), &self.last_segment_ext) {
+        (Some(ext), _) => {
+            let ext = ext.to_owned();
+            self.last_segment_ext = Some(ext.clone());
+            ext
+        }
+        (None, Some(last_ext)) => last_ext.clone(),
+        (None, None) => DEFAULT_FILE_EXT.to_owned(),
+    }
+}
 }
 
 pub fn remove_segments_from_start(media_playlist: &mut MediaPlaylist, lowest_media_sequence: u64) {
@@ -189,18 +205,6 @@ pub fn remove_segments_from_end(media_playlist: &mut MediaPlaylist, highest_medi
     }
     // Stop refreshing
     media_playlist.end_list = true;
-}
-
-fn get_or_update_file_ext(url: &Url, last_segment_ext: &mut Option<String>) -> String {
-    match (url_file_extension(url), last_segment_ext.as_ref()) {
-        (Some(ext), _) => {
-            let ext = ext.to_owned();
-            *last_segment_ext = Some(ext.clone());
-            ext
-        }
-        (None, Some(last_ext)) => last_ext.clone(),
-        (None, None) => DEFAULT_FILE_EXT.to_owned(),
-    }
 }
 
 fn remove_unsupported_tags(ext_tags: &mut Vec<ExtTag>) {

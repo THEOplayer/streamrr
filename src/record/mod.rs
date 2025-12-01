@@ -242,8 +242,8 @@ async fn record_media_playlist(
     let name_in_recording = format!("{dir}index.m3u8");
     let dest = dest.join(dir);
     fs::create_dir_all(&dest).await?;
+    let mut rewriter = Rewriter::new(url);
     let mut previous_playlist = None;
-    let mut last_segment_ext = None;
     let mut lowest_media_sequence = 0;
     let mut highest_media_sequence = None;
     loop {
@@ -284,7 +284,7 @@ async fn record_media_playlist(
         if let Some(highest_media_sequence) = highest_media_sequence {
             remove_segments_from_end(&mut media_playlist, highest_media_sequence);
         }
-        rewrite_media_playlist(url, &mut media_playlist, &mut last_segment_ext)?;
+        rewriter.rewrite_media_playlist(&mut media_playlist)?;
         write_media_playlist(&dest.join(&file_name), &media_playlist).await?;
         // Update recording
         recording
