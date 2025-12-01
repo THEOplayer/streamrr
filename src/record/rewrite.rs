@@ -16,6 +16,7 @@ pub const ORIGINAL_RENDITION_REPORT: &str = "X-ORIGINAL-RENDITION-REPORT";
 
 const DEFAULT_FILE_EXT: &str = "ts";
 
+#[derive(Debug)]
 pub struct Rewriter<'a> {
     playlist_url: &'a Url,
     last_segment_ext: Option<String>,
