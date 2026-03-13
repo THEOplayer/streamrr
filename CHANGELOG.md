@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added SOCKS proxy support. See [the reqwest docs](https://docs.rs/reqwest/latest/reqwest/#proxies) for usage instructions. ([#3](https://github.com/THEOplayer/streamrr/pull/3))
+
 ## v0.2.0 (2025-11-19)
 
 - Added `--address` flag to `replay` command to set the local server's IP address.
