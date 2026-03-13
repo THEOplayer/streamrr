@@ -56,8 +56,11 @@ pub async fn record(
     let recording_path = dest.join("recording.json");
     let recording = RecordingFile::new(&recording_path).await?;
     let recording = Arc::new(Mutex::new(recording));
+    let client = Client::builder()
+        .cookie_store(true)
+        .build()
+        .map_err(|_| RecordError::Config("Error while building HTTP client"))?;
     // Download initial playlist
-    let client = Client::new();
     let raw_playlist = token
         .run_until_cancelled(download_playlist(&client, url))
         .await
