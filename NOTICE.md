@@ -14,7 +14,7 @@ This software bundles the following third-party libraries:
  - m3u8-rs version 6.0.0 (https://github.com/rutgersc/m3u8-rs)  
    Author: Rutger  
    License: MIT
- - reqwest version 0.12.28 (https://github.com/seanmonstar/reqwest)  
+ - reqwest version 0.13.2 (https://github.com/seanmonstar/reqwest)  
    Author: Sean McArthur <sean@seanmonstar.com>  
    License: MIT OR Apache-2.0
  - serde version 1.0.228 (https://github.com/serde-rs/serde)  
