@@ -12,23 +12,23 @@ publish = false
 
 [dependencies]
 m3u8-rs = "6.0.0"
-url = "2.5.7"
-reqwest = { version = "0.12.23", features = ["rustls-tls", "stream", "socks", "cookies"], default-features = false }
-clap = { version = "4.5.48", features = ["derive"] }
+url = "2.5.8"
+reqwest = { version = "0.12.28", features = ["rustls-tls", "stream", "socks", "cookies"], default-features = false }
+clap = { version = "4.6.0", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
-tokio = { version = "1.47.1", features = ["rt-multi-thread", "macros", "signal"] }
-tokio-util = { version = "0.7.16", features = ["io"] }
-futures = "0.3.31"
+serde_json = "1.0.149"
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "signal"] }
+tokio-util = { version = "0.7.18", features = ["io"] }
+futures = "0.3.32"
 warp = { version = "0.4.2", features = ["server"] }
-chrono = "0.4.42"
-anyhow = "1.0.100"
-indexmap = { version = "2.11.4", features = ["serde"] }
+chrono = "0.4.44"
+anyhow = "1.0.102"
+indexmap = { version = "2.13.0", features = ["serde"] }
 sha1 = "0.10.6"
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 
 [dev-dependencies]
-insta = "1.43.2"
+insta = "1.46.3"
 
 # Enable 'dist' even though publish = false
 [package.metadata.dist]
