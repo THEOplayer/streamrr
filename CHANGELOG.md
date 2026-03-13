@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added support for Windows ARM64.
+
 ## v0.3.0 (2026-03-13)
 
 - Added SOCKS proxy support. See [the reqwest docs](https://docs.rs/reqwest/latest/reqwest/#proxies) for usage instructions. ([#3](https://github.com/THEOplayer/streamrr/pull/3))

@@ -9,6 +9,7 @@ Record HLS streams and replay them afterwards.
 1. Download the [latest version from GitHub](https://github.com/THEOplayer/streamrr/releases/latest).  
    Supported platforms:
    - [Windows (x86-64)](https://github.com/THEOplayer/streamrr/releases/latest/download/streamrr-x86_64-pc-windows-msvc.zip)
+   - [Windows (ARM64)](https://github.com/THEOplayer/streamrr/releases/latest/download/streamrr-aarch64-pc-windows-msvc.zip)
    - [Linux (x86-64)](https://github.com/THEOplayer/streamrr/releases/latest/download/streamrr-x86_64-unknown-linux-gnu.tar.xz)
    - [Linux (ARM64)](https://github.com/THEOplayer/streamrr/releases/latest/download/streamrr-aarch64-unknown-linux-gnu.tar.xz)
    - [macOS (Apple Silicon)](https://github.com/THEOplayer/streamrr/releases/latest/download/streamrr-aarch64-apple-darwin.tar.xz)
