@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Added SOCKS proxy support. See [the reqwest docs](https://docs.rs/reqwest/latest/reqwest/#proxies) for usage instructions. ([#3](https://github.com/THEOplayer/streamrr/pull/3))
+- Added cookies support while recording. ([#4](https://github.com/THEOplayer/streamrr/pull/4))
 
 ## v0.2.0 (2025-11-19)
 
