@@ -1,7 +1,9 @@
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::{Parser, Subcommand};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use tokio::spawn;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -71,6 +73,11 @@ enum CliCommand {
         /// - If unset, the recording stops at the last segment of the last media playlist.
         #[arg(long, allow_hyphen_values = true, verbatim_doc_comment)]
         end: Option<f32>,
+        /// Custom HTTP header to send with all requests.
+        ///
+        /// Can be specified multiple times. Format: "Name: Value"
+        #[arg(short = 'H', long = "header", value_name = "Name: Value", value_parser = parse_header)]
+        headers: Vec<(HeaderName, HeaderValue)>,
     },
     /// Replay a HLS VOD or live stream.
     Replay {
@@ -113,6 +120,7 @@ async fn main() {
             bandwidth,
             start,
             end,
+            headers,
         } => {
             let variant_select = if let Some(bandwidth) = bandwidth {
                 VariantSelectOptions::Bandwidth(bandwidth)
@@ -126,6 +134,7 @@ async fn main() {
                 audio,
                 video,
                 subtitle,
+                headers: headers.into_iter().collect::<HeaderMap>(),
             };
             let token = CancellationToken::new();
             let record_task = {
@@ -165,4 +174,17 @@ async fn main() {
             };
         }
     }
+}
+
+fn parse_header(s: &str) -> Result<(HeaderName, HeaderValue), String> {
+    let (name, value) = s
+        .split_once(':')
+        .ok_or_else(|| format!("invalid header (expected \"Name: Value\"): {s}"))?;
+
+    Ok((
+        HeaderName::from_str(name.trim())
+            .map_err(|e| format!("invalid header name \"{}\": {e}", name.trim()))?,
+        HeaderValue::from_str(value.trim())
+            .map_err(|e| format!("invalid header value \"{}\": {e}", value.trim()))?,
+    ))
 }
