@@ -179,12 +179,10 @@ async fn main() {
 fn parse_header(s: &str) -> Result<(HeaderName, HeaderValue), String> {
     let (name, value) = s
         .split_once(':')
-        .ok_or_else(|| format!("invalid header (expected \"Name: Value\"): {s}"))?;
+        .ok_or_else(|| "invalid header (expected \"Name: Value\")".to_string())?;
 
     Ok((
-        HeaderName::from_str(name.trim())
-            .map_err(|e| format!("invalid header name \"{}\": {e}", name.trim()))?,
-        HeaderValue::from_str(value.trim())
-            .map_err(|e| format!("invalid header value \"{}\": {e}", value.trim()))?,
+        HeaderName::from_str(name.trim()).map_err(|e| e.to_string())?,
+        HeaderValue::from_str(value.trim()).map_err(|e| e.to_string())?,
     ))
 }
