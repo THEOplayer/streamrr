@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.2 (2026-03-19)
 
 - Added `--header`/`-H` flag to `record` command to add extra HTTP request headers to every request. ([#5](https://github.com/THEOplayer/streamrr/pull/5))
 
