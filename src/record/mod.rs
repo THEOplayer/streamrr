@@ -4,6 +4,7 @@ use futures::future::{BoxFuture, FutureExt};
 use futures::stream::{StreamExt, TryStreamExt, iter};
 use m3u8_rs::*;
 use reqwest::Client;
+use reqwest::header::HeaderMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -24,7 +25,7 @@ mod rewrite;
 
 const MAX_CONCURRENT_DOWNLOADS: usize = 4;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct RecordOptions {
     pub variant_select: VariantSelectOptions,
     pub audio: MediaSelect,
@@ -32,6 +33,7 @@ pub struct RecordOptions {
     pub subtitle: MediaSelect,
     pub start: Option<f32>,
     pub end: Option<f32>,
+    pub headers: HeaderMap,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -58,6 +60,7 @@ pub async fn record(
     let recording = Arc::new(Mutex::new(recording));
     let client = Client::builder()
         .cookie_store(true)
+        .default_headers(options.headers.clone())
         .build()
         .map_err(|_| RecordError::Config("Error while building HTTP client"))?;
     // Download initial playlist
@@ -177,6 +180,7 @@ async fn record_master_playlist(
             QuotedOrUnquoted::Quoted(variant_url.as_str().to_string()),
         );
         variant.uri = format!("{variant_dir}index.m3u8");
+        let options = options.clone();
         let token = token.clone();
         join_set.spawn(async move {
             record_media_playlist(
@@ -208,6 +212,7 @@ async fn record_master_playlist(
             QuotedOrUnquoted::Quoted(media_url.as_str().to_string()),
         );
         media.uri = Some(format!("{media_dir}index.m3u8"));
+        let options = options.clone();
         let token = token.clone();
         join_set.spawn(async move {
             record_media_playlist(
