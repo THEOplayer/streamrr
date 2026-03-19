@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added `--header`/`-H` flag to `record` command to add extra HTTP request headers to every request. ([#5](https://github.com/THEOplayer/streamrr/pull/5))
+
 ## v0.3.1 (2026-03-13)
 
 - Added support for Windows ARM64.
