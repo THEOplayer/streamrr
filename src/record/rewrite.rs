@@ -1,5 +1,6 @@
-use crate::shared::{ByteRange, hex, url_file_extension};
+use crate::shared::{ByteRange, hex, url_file_extension, url_file_name};
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use m3u8_rs::*;
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
@@ -26,20 +27,50 @@ pub enum RewriteError {
 pub struct Rewriter<'a> {
     playlist_url: &'a Url,
     dest: &'a Path,
+    keep_names: bool,
     last_segment_ext: String,
 }
 
 impl<'a> Rewriter<'a> {
-    pub fn new(playlist_url: &'a Url, dest: &'a Path) -> Self {
+    pub fn new(playlist_url: &'a Url, dest: &'a Path, keep_names: bool) -> Self {
         Self {
             playlist_url,
             dest,
+            keep_names,
             last_segment_ext: DEFAULT_FILE_EXT.to_string(),
         }
     }
 
+    pub fn playlist_name(&self) -> &str {
+        if self.keep_names
+            && let Some(file_name) = url_file_name(self.playlist_url)
+        {
+            file_name
+        } else {
+            "index.m3u8"
+        }
+    }
+
     pub fn playlist_path(&self) -> String {
-        self.dest.join("index.m3u8").to_str().unwrap().to_string()
+        self.dest
+            .join(self.playlist_name())
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    pub fn playlist_path_with_timestamp(&self, timestamp: &DateTime<Utc>) -> String {
+        let file_name = self.playlist_name();
+        let file_name_with_timestamp = format!(
+            "{}-{}.m3u8",
+            file_name.strip_suffix(".m3u8").unwrap_or(file_name),
+            timestamp.format("%Y%m%dT%H%M%S")
+        );
+        self.dest
+            .join(file_name_with_timestamp)
+            .to_str()
+            .unwrap()
+            .to_string()
     }
 
     pub fn rewrite_media_playlist(
@@ -62,12 +93,17 @@ impl<'a> Rewriter<'a> {
         media_sequence_number: u64,
         next_byte_range_start: &mut u64,
     ) -> Result<(), RewriteError> {
+        let Self { keep_names, .. } = *self;
         let segment_url = self
             .playlist_url
             .join(&media_segment.uri)
             .map_err(|_| RewriteError::BadURL(media_segment.uri.clone()))?;
         let file_ext = self.get_or_update_file_ext(&segment_url);
-        let file_name = format!("segment-{media_sequence_number}.{file_ext}");
+        let file_name = if keep_names && let Some(file_name) = url_file_name(&segment_url) {
+            file_name.to_string()
+        } else {
+            format!("segment-{media_sequence_number}.{file_ext}")
+        };
         // Put original URL and byte range in extra tag, and replace segment URL with rewritten path
         media_segment.unknown_tags.push(ExtTag {
             tag: ORIGINAL_URI.to_string(),
@@ -118,11 +154,18 @@ impl<'a> Rewriter<'a> {
             tag: ORIGINAL_KEY_URI.to_string(),
             rest: Some(key_url.as_str().to_string()),
         });
-        // Use a hash of the key URL as filename.
-        // Don't use the media sequence number, since it's likely that this key will appear
-        // on a different segment in a future media playlist.
-        let key_url_hash = Sha1::digest(key_url.as_str().as_bytes());
-        *key_uri = format!("key-{}.bin", hex(key_url_hash));
+        let key_name = if self.keep_names
+            && let Some(file_name) = url_file_name(&key_url)
+        {
+            file_name.to_string()
+        } else {
+            // Use a hash of the key URL as filename.
+            // Don't use the media sequence number, since it's likely that this key will appear
+            // on a different segment in a future media playlist.
+            let key_url_hash = Sha1::digest(key_url.as_str().as_bytes());
+            format!("key-{}.bin", hex(key_url_hash))
+        };
+        *key_uri = key_name;
         Ok(())
     }
 
@@ -147,12 +190,18 @@ impl<'a> Rewriter<'a> {
             &mut map.other_attributes,
             next_byte_range_start,
         );
-        // Use a hash of the key URL as filename.
-        // Don't use the media sequence number, since it's likely that this key will appear
-        // on a different segment in a future media playlist.
-        let map_url_hash = Sha1::digest(map_url.as_str().as_bytes());
-        let file_ext = url_file_extension(&map_url).unwrap_or(DEFAULT_FILE_EXT);
-        let file_name = format!("init-{}.{}", hex(map_url_hash), file_ext);
+        let file_name = if self.keep_names
+            && let Some(file_name) = url_file_name(&map_url)
+        {
+            file_name.to_string()
+        } else {
+            // Use a hash of the key URL as filename.
+            // Don't use the media sequence number, since it's likely that this key will appear
+            // on a different segment in a future media playlist.
+            let map_url_hash = Sha1::digest(map_url.as_str().as_bytes());
+            let file_ext = url_file_extension(&map_url).unwrap_or(DEFAULT_FILE_EXT);
+            format!("init-{}.{}", hex(map_url_hash), file_ext)
+        };
         map.uri = file_name;
         Ok(())
     }

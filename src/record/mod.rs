@@ -34,6 +34,7 @@ pub struct RecordOptions {
     pub start: Option<f32>,
     pub end: Option<f32>,
     pub headers: HeaderMap,
+    pub keep_names: bool,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -249,9 +250,9 @@ async fn record_media_playlist(
     mut options: RecordOptions,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
-    let dest = dest.join(dir);
-    fs::create_dir_all(&dest).await?;
-    let mut rewriter = Rewriter::new(url, dir.as_ref());
+    let dest_dir = dest.join(dir);
+    fs::create_dir_all(&dest_dir).await?;
+    let mut rewriter = Rewriter::new(url, dir.as_ref(), options.keep_names);
     let name_in_recording = rewriter.playlist_path();
     let mut previous_playlist = None;
     let mut lowest_media_sequence = 0;
@@ -273,12 +274,11 @@ async fn record_media_playlist(
         let playlist_time = Utc::now();
         let file_name = if previous_playlist.is_none() && media_playlist.end_list {
             // Playlist is a VOD. No need for a timestamp, since we won't ever refresh it.
-            "index.m3u8".to_string()
+            rewriter.playlist_path()
         } else {
             // Playlist is live, or was live and has now ended
-            format!("index-{}.m3u8", playlist_time.format("%Y%m%dT%H%M%S"))
+            rewriter.playlist_path_with_timestamp(&playlist_time)
         };
-        let file_path = format!("{dir}{file_name}");
         // Clip to start and end time (if given)
         if let Some(start) = options.start.take()
             && let Some(start_index) = find_segment_index_by_offset(&media_playlist.segments, start)
@@ -300,13 +300,13 @@ async fn record_media_playlist(
         recording
             .lock()
             .await
-            .add_and_save(playlist_time, &name_in_recording, file_path)
+            .add_and_save(playlist_time, &name_in_recording, file_name.to_string())
             .await?;
         // Download segments
         download_segments(
             client,
             &media_playlist.segments,
-            &dest,
+            &dest_dir,
             MAX_CONCURRENT_DOWNLOADS,
             token.clone(),
         )

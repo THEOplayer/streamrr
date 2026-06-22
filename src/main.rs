@@ -78,6 +78,13 @@ enum CliCommand {
         /// Can be specified multiple times. Format: "Name: Value"
         #[arg(short = 'H', long = "header", value_name = "Name: Value", value_parser = parse_header)]
         headers: Vec<(HeaderName, HeaderValue)>,
+        /// Whether to preserve the original file names of playlists and segments.
+        ///
+        /// This may not be compatible with all streams. For example, if the segment URLs
+        /// only differ by their query (e.g. `https://example.com/segment?num=1`),
+        /// then all segments would be written to the same `segment` file.
+        #[arg(long)]
+        keep_names: bool,
     },
     /// Replay a HLS VOD or live stream.
     Replay {
@@ -121,6 +128,7 @@ async fn main() {
             start,
             end,
             headers,
+            keep_names,
         } => {
             let variant_select = if let Some(bandwidth) = bandwidth {
                 VariantSelectOptions::Bandwidth(bandwidth)
@@ -135,6 +143,7 @@ async fn main() {
                 video,
                 subtitle,
                 headers: headers.into_iter().collect::<HeaderMap>(),
+                keep_names,
             };
             let token = CancellationToken::new();
             let record_task = {
