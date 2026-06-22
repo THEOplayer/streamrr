@@ -37,6 +37,10 @@ pub enum ReplayError {
     MissingStartTime,
     #[error("Failed to bind to address: {0}")]
     Bind(io::Error),
+    #[error("Missing playlist file: {0}")]
+    MissingPlaylist(PathBuf),
+    #[error("Invalid playlist: {0}")]
+    InvalidPlaylist(#[from] anyhow::Error),
     #[error("Cancelled")]
     Cancelled,
 }
@@ -76,10 +80,10 @@ pub async fn replay(
                     &recording_path,
                     start,
                 )
-                .ok_or_else(|| custom(ServerError::PlaylistNotFound))?;
+                .ok_or_else(|| custom(ServerError::PlaylistNotFound(file_name)))?;
                 let reply = m3u8_reply(&absolute_path, start)
                     .await
-                    .map_err(|_| custom(ServerError::PlaylistFileError))?
+                    .map_err(|e| custom(ServerError::PlaylistFileError(e)))?
                     .into_response();
                 Ok::<reply::Response, Rejection>(reply)
             }
@@ -155,13 +159,17 @@ fn no_playlist_params() -> impl Filter<Extract = (), Error = Rejection> + Clone 
         .untuple_one()
 }
 
-async fn m3u8_reply(path: &Path, start: i64) -> tokio::io::Result<impl Reply + use<>> {
-    let mut file = fs::File::open(&path).await?;
+async fn m3u8_reply(path: &Path, start: i64) -> Result<impl Reply + use<>, ReplayError> {
+    let mut file = fs::File::open(&path)
+        .await
+        .map_err(|_| ReplayError::MissingPlaylist(path.to_owned()))?;
     // Parse the playlist
     let mut raw_playlist = Vec::new();
-    file.read_to_end(&mut raw_playlist).await?;
+    file.read_to_end(&mut raw_playlist)
+        .await
+        .map_err(|e| ReplayError::InvalidPlaylist(anyhow!(e)))?;
     let mut playlist = m3u8_rs::parse_playlist_res(&raw_playlist).map_err(|e| {
-        io::Error::other(anyhow!(e.map_input(|_| path.to_string_lossy().to_string())))
+        ReplayError::InvalidPlaylist(anyhow!(e.map_input(|_| path.to_string_lossy().to_string())))
     })?;
     // Rewrite the playlist
     match &mut playlist {
@@ -193,10 +201,10 @@ async fn m3u8_reply(path: &Path, start: i64) -> tokio::io::Result<impl Reply + u
 
 #[derive(thiserror::Error, Debug)]
 enum ServerError {
-    #[error("No playlist found")]
-    PlaylistNotFound,
-    #[error("Failed to load playlist")]
-    PlaylistFileError,
+    #[error("No playlist found for {0}")]
+    PlaylistNotFound(String),
+    #[error("Failed to load playlist: {0}")]
+    PlaylistFileError(ReplayError),
 }
 
 impl Reject for ServerError {}
