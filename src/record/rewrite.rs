@@ -3,6 +3,7 @@ use anyhow::Result;
 use m3u8_rs::*;
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
+use std::path::Path;
 use url::Url;
 
 pub const ORIGINAL_URI: &str = "X-ORIGINAL-URI";
@@ -24,15 +25,21 @@ pub enum RewriteError {
 #[derive(Debug)]
 pub struct Rewriter<'a> {
     playlist_url: &'a Url,
+    dest: &'a Path,
     last_segment_ext: String,
 }
 
 impl<'a> Rewriter<'a> {
-    pub fn new(playlist_url: &'a Url) -> Self {
+    pub fn new(playlist_url: &'a Url, dest: &'a Path) -> Self {
         Self {
             playlist_url,
+            dest,
             last_segment_ext: DEFAULT_FILE_EXT.to_string(),
         }
+    }
+
+    pub fn playlist_path(&self) -> String {
+        self.dest.join("index.m3u8").to_str().unwrap().to_string()
     }
 
     pub fn rewrite_media_playlist(

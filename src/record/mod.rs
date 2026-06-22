@@ -249,10 +249,10 @@ async fn record_media_playlist(
     mut options: RecordOptions,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
-    let name_in_recording = format!("{dir}index.m3u8");
     let dest = dest.join(dir);
     fs::create_dir_all(&dest).await?;
-    let mut rewriter = Rewriter::new(url);
+    let mut rewriter = Rewriter::new(url, dir.as_ref());
+    let name_in_recording = rewriter.playlist_path();
     let mut previous_playlist = None;
     let mut lowest_media_sequence = 0;
     let mut highest_media_sequence = None;
