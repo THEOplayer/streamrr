@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use std::convert::Infallible;
 use std::fmt::Write;
 use std::net::{IpAddr, SocketAddr};
@@ -159,8 +160,9 @@ async fn m3u8_reply(path: &Path, start: i64) -> tokio::io::Result<impl Reply + u
     // Parse the playlist
     let mut raw_playlist = Vec::new();
     file.read_to_end(&mut raw_playlist).await?;
-    let mut playlist = m3u8_rs::parse_playlist_res(&raw_playlist)
-        .map_err(|_| io::Error::other("Error while parsing playlist"))?;
+    let mut playlist = m3u8_rs::parse_playlist_res(&raw_playlist).map_err(|e| {
+        io::Error::other(anyhow!(e.map_input(|_| path.to_string_lossy().to_string())))
+    })?;
     // Rewrite the playlist
     match &mut playlist {
         Playlist::MasterPlaylist(playlist) => {

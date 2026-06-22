@@ -71,8 +71,12 @@ pub async fn record(
         .run_until_cancelled(download_playlist(&client, url))
         .await
         .ok_or(RecordError::Cancelled)??;
-    let initial_playlist = parse_playlist_res(raw_playlist.as_bytes())
-        .map_err(|e| RecordError::Parse(anyhow!("Error while parsing playlist: {e}")))?;
+    let initial_playlist = parse_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
+        RecordError::Parse(anyhow!(
+            "Error while parsing playlist: {}",
+            e.map_input(|_| url.to_string())
+        ))
+    })?;
     match initial_playlist {
         Playlist::MasterPlaylist(master_playlist) => {
             // Master playlist
