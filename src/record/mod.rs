@@ -115,27 +115,26 @@ async fn record_master_playlist(
     dest: &Path,
     recording: Arc<Mutex<RecordingFile>>,
     options: RecordOptions,
-    master_playlist: MasterPlaylist,
+    mut master_playlist: MasterPlaylist,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
     // Rewrite master playlist
-    let mut new_master_playlist = master_playlist.clone();
     let rewriter = Rewriter::new(url, dest, options.keep_names);
-    rewriter.rewrite_master_playlist(&mut new_master_playlist)?;
+    rewriter.rewrite_master_playlist(&mut master_playlist)?;
 
     // Select variant streams
-    new_master_playlist.variants = options
+    master_playlist.variants = options
         .variant_select
-        .filter_variants(&new_master_playlist.variants)
+        .filter_variants(&master_playlist.variants)
         .to_vec();
-    if new_master_playlist.variants.is_empty() {
+    if master_playlist.variants.is_empty() {
         return Err(RecordError::Config("No variant streams selected."));
     }
     // Select renditions
-    let alternatives = &mut new_master_playlist.alternatives;
+    let alternatives = &mut master_playlist.alternatives;
     alternatives.retain(|media| {
         // Must apply to at least one selected variant stream
-        new_master_playlist
+        master_playlist
             .variants
             .iter()
             .any(|variant| media_applies_to_variant(media, variant))
@@ -170,17 +169,17 @@ async fn record_master_playlist(
     let video_renditions = options.video.filter_media(&video_renditions).to_vec();
     let subtitle_renditions = options.subtitle.filter_media(&subtitle_renditions).to_vec();
 
-    new_master_playlist.alternatives = audio_renditions;
-    new_master_playlist.alternatives.extend(video_renditions);
-    new_master_playlist.alternatives.extend(subtitle_renditions);
-    new_master_playlist.alternatives.extend(cc_renditions);
-    new_master_playlist.alternatives.extend(other_renditions);
+    master_playlist.alternatives = audio_renditions;
+    master_playlist.alternatives.extend(video_renditions);
+    master_playlist.alternatives.extend(subtitle_renditions);
+    master_playlist.alternatives.extend(cc_renditions);
+    master_playlist.alternatives.extend(other_renditions);
 
-    let new_master_playlist = new_master_playlist;
+    let master_playlist = master_playlist;
 
     // Start recording selected variant streams and renditions
     let mut join_set = JoinSet::new();
-    for variant in &new_master_playlist.variants {
+    for variant in &master_playlist.variants {
         let Some(other_attributes) = &variant.other_attributes else {
             continue;
         };
@@ -212,7 +211,7 @@ async fn record_master_playlist(
             .await
         });
     }
-    for media in &new_master_playlist.alternatives {
+    for media in &master_playlist.alternatives {
         let Some(media_uri) = &media.uri else {
             continue;
         };
@@ -242,7 +241,7 @@ async fn record_master_playlist(
     }
     // Write updated master playlist
     let master_name = "index.m3u8";
-    write_master_playlist(&dest.join(master_name), &new_master_playlist).await?;
+    write_master_playlist(&dest.join(master_name), &master_playlist).await?;
     recording
         .lock()
         .await
