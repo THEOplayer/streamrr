@@ -1,10 +1,10 @@
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::{BoxFuture, FutureExt, TryFutureExt};
 use futures::stream::{StreamExt, TryStreamExt, iter};
 use m3u8_rs::*;
-use reqwest::Client;
 use reqwest::header::HeaderMap;
+use reqwest::{Client, Response};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -344,9 +344,7 @@ async fn download_playlist(client: &Client, url: &Url) -> Result<String, RecordE
     client
         .get(url.clone())
         .send()
-        .await
-        .map_err(|e| RecordError::Io(io::Error::other(e)))?
-        .text()
+        .and_then(Response::text)
         .await
         .map_err(|e| RecordError::Io(io::Error::other(e)))
 }
