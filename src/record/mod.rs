@@ -118,11 +118,15 @@ async fn record_master_playlist(
     master_playlist: MasterPlaylist,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
+    // Rewrite master playlist
     let mut new_master_playlist = master_playlist.clone();
+    let rewriter = Rewriter::new(url, dest, options.keep_names);
+    rewriter.rewrite_master_playlist(&mut new_master_playlist)?;
+
     // Select variant streams
     new_master_playlist.variants = options
         .variant_select
-        .filter_variants(&master_playlist.variants)
+        .filter_variants(&new_master_playlist.variants)
         .to_vec();
     if new_master_playlist.variants.is_empty() {
         return Err(RecordError::Config("No variant streams selected."));
@@ -172,21 +176,26 @@ async fn record_master_playlist(
     new_master_playlist.alternatives.extend(cc_renditions);
     new_master_playlist.alternatives.extend(other_renditions);
 
+    let new_master_playlist = new_master_playlist;
+
     // Start recording selected variant streams and renditions
     let mut join_set = JoinSet::new();
-    for (i, variant) in new_master_playlist.variants.iter_mut().enumerate() {
-        let variant_url = url
-            .join(&variant.uri)
-            .map_err(|_| RecordError::Parse(anyhow!("Bad URL: {}", &variant.uri)))?;
-        let variant_dir = format!("variant{i}/");
+    for variant in &new_master_playlist.variants {
+        let Some(other_attributes) = &variant.other_attributes else {
+            continue;
+        };
+        let Some(variant_url) = other_attributes.get(ORIGINAL_URI) else {
+            continue;
+        };
+        let variant_url = Url::parse(variant_url.as_str()).unwrap();
+        let variant_dir = Path::new(&variant.uri)
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         let client = client.clone();
         let dest = PathBuf::from(dest);
         let recording = recording.clone();
-        variant.other_attributes.get_or_insert_default().insert(
-            ORIGINAL_URI.to_string(),
-            QuotedOrUnquoted::Quoted(variant_url.as_str().to_string()),
-        );
-        variant.uri = format!("{variant_dir}index.m3u8");
         let options = options.clone();
         let token = token.clone();
         join_set.spawn(async move {
@@ -203,22 +212,25 @@ async fn record_master_playlist(
             .await
         });
     }
-    for (i, media) in new_master_playlist.alternatives.iter_mut().enumerate() {
+    for media in &new_master_playlist.alternatives {
         let Some(media_uri) = &media.uri else {
             continue;
         };
-        let media_url = url
-            .join(media_uri)
-            .map_err(|e| RecordError::Parse(anyhow!("Error while parsing playlist: {e}")))?;
-        let media_dir = format!("media-{}-{}/", media.group_id, i);
+        let Some(other_attributes) = &media.other_attributes else {
+            continue;
+        };
+        let Some(media_url) = other_attributes.get(ORIGINAL_URI) else {
+            continue;
+        };
+        let media_url = Url::parse(media_url.as_str()).unwrap();
+        let media_dir = Path::new(media_uri)
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         let client = client.clone();
         let dest = PathBuf::from(dest);
         let recording = recording.clone();
-        media.other_attributes.get_or_insert_default().insert(
-            ORIGINAL_URI.to_string(),
-            QuotedOrUnquoted::Quoted(media_url.as_str().to_string()),
-        );
-        media.uri = Some(format!("{media_dir}index.m3u8"));
         let options = options.clone();
         let token = token.clone();
         join_set.spawn(async move {

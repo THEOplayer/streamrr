@@ -41,14 +41,18 @@ impl<'a> Rewriter<'a> {
         }
     }
 
-    pub fn playlist_name(&self) -> &str {
+    pub fn build_playlist_name<'b>(&self, url: &'b Url) -> &'b str {
         if self.keep_names
-            && let Some(file_name) = url_file_name(self.playlist_url)
+            && let Some(file_name) = url_file_name(url)
         {
             file_name
         } else {
             "index.m3u8"
         }
+    }
+
+    pub fn playlist_name(&self) -> &str {
+        self.build_playlist_name(self.playlist_url)
     }
 
     pub fn playlist_path(&self) -> String {
@@ -71,6 +75,42 @@ impl<'a> Rewriter<'a> {
             .to_str()
             .unwrap()
             .to_string()
+    }
+
+    pub fn rewrite_master_playlist(
+        &self,
+        master_playlist: &mut MasterPlaylist,
+    ) -> Result<(), RewriteError> {
+        for (i, variant) in master_playlist.variants.iter_mut().enumerate() {
+            let variant_url = self
+                .playlist_url
+                .join(&variant.uri)
+                .map_err(|_| RewriteError::BadURL(variant.uri.clone()))?;
+            let variant_dir = format!("variant{i}");
+            let variant_name = self.build_playlist_name(&variant_url);
+            variant.other_attributes.get_or_insert_default().insert(
+                ORIGINAL_URI.to_string(),
+                QuotedOrUnquoted::Quoted(variant_url.as_str().to_string()),
+            );
+            variant.uri = format!("{variant_dir}/{variant_name}");
+        }
+        for (i, media) in master_playlist.alternatives.iter_mut().enumerate() {
+            let Some(media_uri) = &media.uri else {
+                continue;
+            };
+            let media_url = self
+                .playlist_url
+                .join(media_uri)
+                .map_err(|_| RewriteError::BadURL(media_uri.clone()))?;
+            let media_dir = format!("media-{}-{}", media.group_id, i);
+            let media_name = self.build_playlist_name(&media_url);
+            media.other_attributes.get_or_insert_default().insert(
+                ORIGINAL_URI.to_string(),
+                QuotedOrUnquoted::Quoted(media_url.as_str().to_string()),
+            );
+            media.uri = Some(format!("{media_dir}/{media_name}"));
+        }
+        Ok(())
     }
 
     pub fn rewrite_media_playlist(
