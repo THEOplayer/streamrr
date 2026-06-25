@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added `--keep-names` flag to `record` command to preserve the original file names of playlists and segments in the recording. (This may not be compatible with all streams.) ([#6](https://github.com/THEOplayer/streamrr/pull/6))
+
 ## v0.3.2 (2026-03-19)
 
 - Added `--header`/`-H` flag to `record` command to add extra HTTP request headers to every request. ([#5](https://github.com/THEOplayer/streamrr/pull/5))
