@@ -20,7 +20,7 @@ use warp::reject::{Reject, custom};
 use warp::{Filter, Rejection, Reply, reject, reply};
 
 use crate::record::strip_media_playlist;
-use crate::shared::Recording;
+use crate::shared::{Recording, StripBom};
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 struct PlaylistQueryParams {
@@ -168,8 +168,11 @@ async fn m3u8_reply(path: &Path, start: i64) -> Result<impl Reply + use<>, Repla
     file.read_to_end(&mut raw_playlist)
         .await
         .map_err(|e| ReplayError::InvalidPlaylist(anyhow!(e)))?;
+    (&mut raw_playlist).strip_bom();
     let mut playlist = m3u8_rs::parse_playlist_res(&raw_playlist).map_err(|e| {
-        ReplayError::InvalidPlaylist(anyhow!(e.map_input(|_| path.to_string_lossy().to_string())))
+        ReplayError::InvalidPlaylist(anyhow!(
+            e.map_input(|i| String::from_utf8_lossy(i).to_string())
+        ))
     })?;
     // Rewrite the playlist
     match &mut playlist {
