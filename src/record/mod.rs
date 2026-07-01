@@ -74,7 +74,7 @@ pub async fn record(
     let initial_playlist = parse_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
         RecordError::Parse(anyhow!(
             "Error while parsing playlist: {}",
-            e.map_input(|_| url.to_string())
+            e.map_input(|i| String::from_utf8_lossy(i))
         ))
     })?;
     match initial_playlist {
@@ -282,7 +282,10 @@ async fn record_media_playlist(
                 .await
                 .ok_or(RecordError::Cancelled)??;
             parse_media_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
-                RecordError::Parse(anyhow!("Error while parsing media playlist: {e}"))
+                RecordError::Parse(anyhow!(
+                    "Error while parsing media playlist: {}",
+                    e.map_input(|i| String::from_utf8_lossy(i))
+                ))
             })?
         };
         let now = Instant::now();

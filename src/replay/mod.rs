@@ -169,7 +169,9 @@ async fn m3u8_reply(path: &Path, start: i64) -> Result<impl Reply + use<>, Repla
         .await
         .map_err(|e| ReplayError::InvalidPlaylist(anyhow!(e)))?;
     let mut playlist = m3u8_rs::parse_playlist_res(&raw_playlist).map_err(|e| {
-        ReplayError::InvalidPlaylist(anyhow!(e.map_input(|_| path.to_string_lossy().to_string())))
+        ReplayError::InvalidPlaylist(anyhow!(
+            e.map_input(|i| String::from_utf8_lossy(i).to_string())
+        ))
     })?;
     // Rewrite the playlist
     match &mut playlist {
