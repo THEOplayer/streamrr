@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.3 (2026-07-01)
 
 - Added `--keep-names` flag to `record` command to preserve the original file names of playlists and segments in the recording. (This may not be compatible with all streams.) ([#6](https://github.com/THEOplayer/streamrr/pull/6))
 - Fixed an issue where HLS playlists that start with a [UTF-8 byte order mark (BOM)](https://en.wikipedia.org/wiki/Byte_order_mark#UTF-8) were not parsed correctly. ([#7](https://github.com/THEOplayer/streamrr/issues/7), [#8](https://github.com/THEOplayer/streamrr/pull/8)) 
