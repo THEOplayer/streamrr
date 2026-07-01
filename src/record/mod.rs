@@ -18,7 +18,7 @@ use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::shared::{ByteRange, MediaSelect, Recording, VariantSelectOptions};
+use crate::shared::{ByteRange, MediaSelect, Recording, StripBom, VariantSelectOptions};
 pub use rewrite::*;
 
 mod rewrite;
@@ -70,7 +70,8 @@ pub async fn record(
     let raw_playlist = token
         .run_until_cancelled(download_playlist(&client, url))
         .await
-        .ok_or(RecordError::Cancelled)??;
+        .ok_or(RecordError::Cancelled)??
+        .strip_bom();
     let initial_playlist = parse_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
         RecordError::Parse(anyhow!(
             "Error while parsing playlist: {}",
@@ -280,7 +281,8 @@ async fn record_media_playlist(
             let raw_playlist = token
                 .run_until_cancelled(download_playlist(client, url))
                 .await
-                .ok_or(RecordError::Cancelled)??;
+                .ok_or(RecordError::Cancelled)??
+                .strip_bom();
             parse_media_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
                 RecordError::Parse(anyhow!(
                     "Error while parsing media playlist: {}",
