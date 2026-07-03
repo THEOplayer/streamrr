@@ -18,6 +18,7 @@ pub const ORIGINAL_RENDITION_REPORT: &str = "X-ORIGINAL-RENDITION-REPORT";
 const DEFAULT_FILE_EXT: &str = "ts";
 
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum RewriteError {
     #[error("Bad URL: {0}")]
     BadURL(String),

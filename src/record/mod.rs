@@ -38,6 +38,7 @@ pub struct RecordOptions {
 }
 
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum RecordError {
     #[error("configuration error: {0}")]
     Config(&'static str),

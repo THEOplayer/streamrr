@@ -28,6 +28,7 @@ struct PlaylistQueryParams {
 }
 
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum ReplayError {
     #[error("Missing recording file")]
     MissingRecording,
@@ -203,6 +204,7 @@ async fn m3u8_reply(path: &Path, start: i64) -> Result<impl Reply + use<>, Repla
 }
 
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 enum ServerError {
     #[error("No playlist found for {0}")]
     PlaylistNotFound(String),
