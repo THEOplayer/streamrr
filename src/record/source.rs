@@ -4,8 +4,10 @@ use futures::{Stream, future::ready, stream::once};
 use tokio_util::bytes::Bytes;
 use url::Url;
 
+pub mod har;
 pub mod http;
 
+pub use har::HarSource;
 pub use http::HttpSource;
 
 pub trait Source: Clone + Send + Sync {

@@ -108,6 +108,44 @@ enum CliCommand {
         /// The directory path to store the recording of the HLS stream.
         #[arg(value_name = "PATH")]
         recording_path: PathBuf,
+        /// The variant stream(s) to record.
+        #[arg(short = 'v', long, default_value = "first")]
+        variant: VariantSelect,
+        /// The audio renditions(s) to record.
+        #[arg(long, default_value = "default")]
+        audio: MediaSelect,
+        /// The video renditions(s) to record.
+        #[arg(long, default_value = "default")]
+        video: MediaSelect,
+        /// The subtitle renditions(s) to record.
+        #[arg(long, default_value = "default")]
+        subtitle: MediaSelect,
+        /// The maximum bandwidth of the variant stream to record.
+        ///
+        /// Cannot be used when --variant is set.
+        #[arg(short = 'b', long, conflicts_with = "variant")]
+        bandwidth: Option<u64>,
+        /// The start time of the first segment to record, in seconds.
+        ///
+        /// - If positive, the start time counts from the start of the first media playlist.
+        /// - If negative, the start time counts from the end of the first media playlist.
+        /// - If unset, the recording starts at the first segment of the first media playlist.
+        #[arg(long, allow_hyphen_values = true, verbatim_doc_comment)]
+        start: Option<f32>,
+        /// The end time of the first segment to record, in seconds.
+        ///
+        /// - If positive, the end time counts from the start of the first media playlist.
+        /// - If negative, the end time counts from the end of the first media playlist.
+        /// - If unset, the recording stops at the last segment of the last media playlist.
+        #[arg(long, allow_hyphen_values = true, verbatim_doc_comment)]
+        end: Option<f32>,
+        /// Whether to preserve the original file names of playlists and segments.
+        ///
+        /// This may not be compatible with all streams. For example, if the segment URLs
+        /// only differ by their query (e.g. `https://example.com/segment?num=1`),
+        /// then all segments would be written to the same `segment` file.
+        #[arg(long)]
+        keep_names: bool,
     },
 }
 
@@ -196,10 +234,47 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Import {
             har_path,
             recording_path,
+            variant,
+            audio,
+            video,
+            subtitle,
+            bandwidth,
+            start,
+            end,
+            keep_names,
         } => {
+            let variant_select = if let Some(bandwidth) = bandwidth {
+                VariantSelectOptions::Bandwidth(bandwidth)
+            } else {
+                VariantSelectOptions::Named(variant)
+            };
+            let options = RecordOptions {
+                start,
+                end,
+                variant_select,
+                audio,
+                video,
+                subtitle,
+                headers: HeaderMap::new(),
+                keep_names,
+            };
+            let token = CancellationToken::new();
             let har_file = File::open(har_path)?;
             let har = serde_json::from_reader(BufReader::new(har_file))?;
-            streamrr::import::import_har(har, &recording_path).await?;
+            let import_task = {
+                let token = token.clone();
+                spawn(async move {
+                    streamrr::import::import_har(har, &recording_path, options, token).await
+                })
+            };
+            match abort_on_ctrlc(import_task, token, RecordError::Cancelled).await {
+                Ok(()) => {}
+                Err(RecordError::Cancelled) => println!("Stopped importing."),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
         }
     }
     Ok(())
