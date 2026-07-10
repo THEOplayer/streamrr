@@ -1,12 +1,13 @@
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
-use futures::future::{BoxFuture, FutureExt, TryFutureExt};
+use futures::future::{BoxFuture, FutureExt};
 use futures::stream::{StreamExt, TryStreamExt, iter};
 use m3u8_rs::*;
+use reqwest::Client;
 use reqwest::header::HeaderMap;
-use reqwest::{Client, Response};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs;
@@ -20,8 +21,10 @@ use url::Url;
 
 use crate::shared::{ByteRange, MediaSelect, Recording, StripBom, VariantSelectOptions};
 pub use rewrite::*;
+pub use source::*;
 
 mod rewrite;
+mod source;
 
 const MAX_CONCURRENT_DOWNLOADS: usize = 4;
 
@@ -67,9 +70,10 @@ pub async fn record(
         .default_headers(options.headers.clone())
         .build()
         .map_err(|_| RecordError::Config("Error while building HTTP client"))?;
+    let source = HttpSource::new(client);
     // Download initial playlist
     let raw_playlist = token
-        .run_until_cancelled(download_playlist(&client, url))
+        .run_until_cancelled(download_playlist(&source, url))
         .await
         .ok_or(RecordError::Cancelled)??
         .strip_bom();
@@ -83,7 +87,7 @@ pub async fn record(
         Playlist::MasterPlaylist(master_playlist) => {
             // Master playlist
             record_master_playlist(
-                &client,
+                source,
                 url,
                 dest,
                 recording,
@@ -96,7 +100,7 @@ pub async fn record(
         Playlist::MediaPlaylist(media_playlist) => {
             // Media playlist only
             record_media_playlist(
-                &client,
+                source,
                 url,
                 "",
                 Some(media_playlist),
@@ -112,7 +116,7 @@ pub async fn record(
 }
 
 async fn record_master_playlist(
-    client: &Client,
+    source: impl Source + 'static,
     url: &Url,
     dest: &Path,
     recording: Arc<Mutex<RecordingFile>>,
@@ -194,14 +198,14 @@ async fn record_master_playlist(
             .unwrap()
             .to_string_lossy()
             .to_string();
-        let client = client.clone();
+        let source = source.clone();
         let dest = PathBuf::from(dest);
         let recording = recording.clone();
         let options = options.clone();
         let token = token.clone();
         join_set.spawn(async move {
             record_media_playlist(
-                &client,
+                source,
                 &variant_url,
                 &variant_dir,
                 None,
@@ -229,14 +233,14 @@ async fn record_master_playlist(
             .unwrap()
             .to_string_lossy()
             .to_string();
-        let client = client.clone();
+        let source = source.clone();
         let dest = PathBuf::from(dest);
         let recording = recording.clone();
         let options = options.clone();
         let token = token.clone();
         join_set.spawn(async move {
             record_media_playlist(
-                &client, &media_url, &media_dir, None, &dest, recording, options, token,
+                source, &media_url, &media_dir, None, &dest, recording, options, token,
             )
             .await
         });
@@ -257,8 +261,8 @@ async fn record_master_playlist(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn record_media_playlist(
-    client: &Client,
+async fn record_media_playlist<S: Source>(
+    source: S,
     url: &Url,
     dir: &str,
     mut initial_playlist: Option<MediaPlaylist>,
@@ -280,7 +284,7 @@ async fn record_media_playlist(
             playlist
         } else {
             let raw_playlist = token
-                .run_until_cancelled(download_playlist(client, url))
+                .run_until_cancelled(download_playlist(&source, url))
                 .await
                 .ok_or(RecordError::Cancelled)??
                 .strip_bom();
@@ -325,7 +329,7 @@ async fn record_media_playlist(
             .await?;
         // Download segments
         download_segments(
-            client,
+            &source,
             &media_playlist.segments,
             &dest_dir,
             MAX_CONCURRENT_DOWNLOADS,
@@ -346,11 +350,9 @@ async fn record_media_playlist(
     Ok(())
 }
 
-async fn download_playlist(client: &Client, url: &Url) -> Result<String, RecordError> {
-    client
-        .get(url.clone())
-        .send()
-        .and_then(Response::text)
+async fn download_playlist<S: Source>(source: &S, url: &Url) -> Result<String, RecordError> {
+    source
+        .request_string(url, None)
         .await
         .map_err(|e| RecordError::Io(io::Error::other(e)))
 }
@@ -401,8 +403,8 @@ fn find_segment_index_by_offset(segments: &[MediaSegment], offset: f32) -> Optio
     }
 }
 
-async fn download_segments(
-    client: &Client,
+async fn download_segments<S: Source>(
+    source: &S,
     media_segments: &[MediaSegment],
     dir: &Path,
     max_concurrent_downloads: usize,
@@ -410,7 +412,7 @@ async fn download_segments(
 ) -> Result<(), RecordError> {
     let segment_tasks = media_segments
         .iter()
-        .flat_map(|segment| make_segment_download_tasks(client, dir, segment, token.clone()));
+        .flat_map(|segment| make_segment_download_tasks(source, dir, segment, token.clone()));
     iter(segment_tasks)
         .boxed() // https://github.com/rust-lang/rust/issues/104382
         .buffered(max_concurrent_downloads)
@@ -418,25 +420,25 @@ async fn download_segments(
         .await
 }
 
-fn make_segment_download_tasks<'a>(
-    client: &'a Client,
+fn make_segment_download_tasks<'a, S: Source>(
+    source: &'a S,
     dir: &'a Path,
     segment: &'a MediaSegment,
     token: CancellationToken,
 ) -> Vec<BoxFuture<'a, Result<(), RecordError>>> {
     let mut tasks = Vec::with_capacity(3);
-    tasks.push(download_segment(client, segment, dir, token.clone()).boxed());
+    tasks.push(download_segment(source, segment, dir, token.clone()).boxed());
     if let Some(key) = segment.key.as_ref() {
-        tasks.push(download_key(client, key, segment, dir, token.clone()).boxed());
+        tasks.push(download_key(source, key, segment, dir, token.clone()).boxed());
     }
     if let Some(map) = segment.map.as_ref() {
-        tasks.push(download_map(client, map, segment, dir, token).boxed());
+        tasks.push(download_map(source, map, segment, dir, token).boxed());
     }
     tasks
 }
 
-async fn download_segment(
-    client: &Client,
+async fn download_segment<S: Source>(
+    source: &S,
     media_segment: &MediaSegment,
     dir: &Path,
     token: CancellationToken,
@@ -460,7 +462,7 @@ async fn download_segment(
         })?;
     let segment_file = &media_segment.uri;
     download_file(
-        client,
+        source,
         segment_url,
         segment_byte_range,
         segment_file,
@@ -470,8 +472,8 @@ async fn download_segment(
     .await
 }
 
-async fn download_key(
-    client: &Client,
+async fn download_key<S: Source>(
+    source: &S,
     key: &Key,
     media_segment: &MediaSegment,
     dir: &Path,
@@ -487,7 +489,7 @@ async fn download_key(
     let key_uri = original_key_tag.rest.as_ref().unwrap();
     let key_file = key.uri.as_ref().unwrap();
     download_file(
-        client,
+        source,
         key_uri.as_str(),
         None,
         key_file.as_str(),
@@ -497,8 +499,8 @@ async fn download_key(
     .await
 }
 
-async fn download_map(
-    client: &Client,
+async fn download_map<S: Source>(
+    source: &S,
     map: &Map,
     media_segment: &MediaSegment,
     dir: &Path,
@@ -522,7 +524,7 @@ async fn download_map(
         })?;
     let map_file = &map.uri;
     download_file(
-        client,
+        source,
         map_uri.as_str(),
         map_byte_range,
         map_file,
@@ -532,8 +534,8 @@ async fn download_map(
     .await
 }
 
-async fn download_file(
-    client: &Client,
+async fn download_file<S: Source>(
+    source: &S,
     url: &str,
     byte_range: Option<ByteRange>,
     file_name: &str,
@@ -551,26 +553,15 @@ async fn download_file(
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
         Err(err) => return Err(err.into()),
     };
-    let range_header = byte_range.map(|byte_range| {
-        let start = byte_range.offset;
-        let end = start + byte_range.length - 1; // end byte for a range request is inclusive!
-        format!("bytes={start}-{end}")
-    });
-    println!(
-        "Download: {url} {}",
-        range_header.as_ref().unwrap_or(&String::new())
-    );
-    let mut request = client.get(url);
-    if let Some(range_header) = range_header {
-        request = request.header(reqwest::header::RANGE, range_header);
-    }
-    let response = token
-        .run_until_cancelled(request.send())
+    let url = url
+        .parse::<Url>()
+        .map_err(|e| RecordError::Parse(anyhow!("Invalid URL: {e}")))?;
+    let response_stream = token
+        .run_until_cancelled(source.request_stream(&url, byte_range))
         .await
         .ok_or(RecordError::Cancelled)?
-        .map_err(|e| RecordError::Io(io::Error::other(e)))?;
-    let response_stream = response.bytes_stream().map_err(io::Error::other);
-    let mut response_stream = StreamReader::new(response_stream);
+        .map_err(io::Error::other);
+    let mut response_stream = pin!(StreamReader::new(response_stream));
     tokio::io::copy_buf(&mut response_stream, &mut file).await?;
     Ok(())
 }
@@ -634,34 +625,34 @@ mod tests {
     fn require_async_fn_to_be_send() {
         let url = Url::parse("https://a.com/").unwrap();
         let path = Path::new("");
-        let client = Client::new();
+        let source = HttpSource::new(Client::new());
         let token = CancellationToken::new();
 
         fn require_send<T: Send>(_t: T) {}
-        require_send(download_playlist(&client, &url));
+        require_send(download_playlist(&source, &url));
         require_send(write_master_playlist(path, &MasterPlaylist::default()));
         require_send(write_media_playlist(path, &MediaPlaylist::default()));
-        require_send(download_segments(&client, &[], path, 0, token.clone()));
+        require_send(download_segments(&source, &[], path, 0, token.clone()));
         require_send(download_segment(
-            &client,
+            &source,
             &MediaSegment::empty(),
             path,
             token.clone(),
         ));
         require_send(download_key(
-            &client,
+            &source,
             &Key::default(),
             &MediaSegment::empty(),
             path,
             token.clone(),
         ));
         require_send(download_map(
-            &client,
+            &source,
             &Map::default(),
             &MediaSegment::empty(),
             path,
             token.clone(),
         ));
-        require_send(download_file(&client, "", None, "", path, token.clone()));
+        require_send(download_file(&source, "", None, "", path, token.clone()));
     }
 }
