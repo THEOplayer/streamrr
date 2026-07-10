@@ -61,16 +61,26 @@ pub async fn record(
     options: RecordOptions,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
-    fs::create_dir_all(dest).await?;
-    let recording_path = dest.join("recording.json");
-    let recording = RecordingFile::new(&recording_path).await?;
-    let recording = Arc::new(Mutex::new(recording));
     let client = Client::builder()
         .cookie_store(true)
         .default_headers(options.headers.clone())
         .build()
         .map_err(|_| RecordError::Config("Error while building HTTP client"))?;
     let source = HttpSource::new(client);
+    record_with_source(url, dest, options, source, token).await
+}
+
+pub async fn record_with_source(
+    url: &Url,
+    dest: &Path,
+    options: RecordOptions,
+    source: impl Source + 'static,
+    token: CancellationToken,
+) -> Result<(), RecordError> {
+    fs::create_dir_all(dest).await?;
+    let recording_path = dest.join("recording.json");
+    let recording = RecordingFile::new(&recording_path).await?;
+    let recording = Arc::new(Mutex::new(recording));
     // Download initial playlist
     let raw_playlist = token
         .run_until_cancelled(download_playlist(&source, url))
