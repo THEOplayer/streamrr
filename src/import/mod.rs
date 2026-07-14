@@ -33,9 +33,10 @@ pub async fn import_har(
         .url
         .parse::<Url>()
         .map_err(|e| RecordError::Parse(anyhow!("Invalid URL: {e}")))?;
+    let time = first_playlist_request.started_date_time;
 
     // Create a source that reads from the HAR
-    let source = HarSource::new(har);
+    let source = HarSource::new(har, time);
 
     record_with_source(&url, dest, options, source, token).await
 }
