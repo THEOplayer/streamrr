@@ -1,8 +1,9 @@
 use super::Source;
 use crate::shared::{ByteRange, Timed};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures::{Stream, TryStreamExt, future::ready, stream::once};
 use reqwest::{Client, RequestBuilder, Response};
+use tokio::time::sleep;
 use tokio_util::bytes::Bytes;
 use url::Url;
 
@@ -38,6 +39,12 @@ impl HttpSource {
 
 impl Source for HttpSource {
     type Error = reqwest::Error;
+
+    async fn advance_to_time(&mut self, time: DateTime<Utc>) {
+        let now = Utc::now();
+        let duration = (now - time).to_std().unwrap_or_default();
+        sleep(duration).await
+    }
 
     async fn request(
         &self,

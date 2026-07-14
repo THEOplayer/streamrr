@@ -19,7 +19,7 @@ impl HarSource {
 impl Source for HarSource {
     type Error = std::io::Error;
 
-    fn set_request_time(&mut self, _time: DateTime<Utc>) {
+    async fn advance_to_time(&mut self, _time: DateTime<Utc>) {
         todo!()
     }
 
