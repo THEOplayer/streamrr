@@ -1,4 +1,5 @@
 use base64::prelude::*;
+use chrono::{DateTime, Utc};
 pub use har::v1_3::*;
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -42,10 +43,21 @@ pub struct Log {
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
+pub struct Pages {
+    #[serde(rename = "startedDateTime")]
+    pub started_date_time: DateTime<Utc>,
+    pub id: String,
+    pub title: String,
+    #[serde(rename = "pageTimings")]
+    pub page_timings: PageTimings,
+    pub comment: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct Entries {
     pub pageref: Option<String>,
     #[serde(rename = "startedDateTime")]
-    pub started_date_time: String,
+    pub started_date_time: DateTime<Utc>,
     pub time: f64,
     pub request: Request,
     pub response: Response,
