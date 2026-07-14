@@ -19,7 +19,7 @@ use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::shared::{ByteRange, MediaSelect, Recording, StripBom, VariantSelectOptions};
+use crate::shared::{ByteRange, MediaSelect, Recording, StripBom, Timed, VariantSelectOptions};
 pub use rewrite::*;
 pub use source::*;
 
@@ -82,17 +82,22 @@ pub async fn record_with_source(
     let recording = RecordingFile::new(&recording_path).await?;
     let recording = Arc::new(Mutex::new(recording));
     // Download initial playlist
-    let raw_playlist = token
+    let Timed {
+        value: initial_playlist,
+        time: playlist_time,
+    } = token
         .run_until_cancelled(download_playlist(&source, url))
         .await
         .ok_or(RecordError::Cancelled)??
-        .strip_bom();
-    let initial_playlist = parse_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
-        RecordError::Parse(anyhow!(
-            "Error while parsing playlist: {}",
-            e.map_input(|i| String::from_utf8_lossy(i))
-        ))
-    })?;
+        .and_then(|raw_playlist| {
+            let raw_playlist = raw_playlist.strip_bom();
+            parse_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
+                RecordError::Parse(anyhow!(
+                    "Error while parsing playlist: {}",
+                    e.map_input(|i| String::from_utf8_lossy(i))
+                ))
+            })
+        })?;
     match initial_playlist {
         Playlist::MasterPlaylist(master_playlist) => {
             // Master playlist
@@ -113,7 +118,10 @@ pub async fn record_with_source(
                 source,
                 url,
                 "",
-                Some(media_playlist),
+                Some(Timed {
+                    value: media_playlist,
+                    time: playlist_time,
+                }),
                 dest,
                 recording,
                 options,
@@ -275,7 +283,7 @@ async fn record_media_playlist<S: Source>(
     source: S,
     url: &Url,
     dir: &str,
-    mut initial_playlist: Option<MediaPlaylist>,
+    mut initial_playlist: Option<Timed<MediaPlaylist>>,
     dest: &Path,
     recording: Arc<Mutex<RecordingFile>>,
     mut options: RecordOptions,
@@ -290,23 +298,27 @@ async fn record_media_playlist<S: Source>(
     let mut highest_media_sequence = None;
     loop {
         // Download and rewrite playlist
-        let mut media_playlist = if let Some(playlist) = initial_playlist.take() {
+        let Timed {
+            value: mut media_playlist,
+            time: playlist_time,
+        } = if let Some(playlist) = initial_playlist.take() {
             playlist
         } else {
-            let raw_playlist = token
+            token
                 .run_until_cancelled(download_playlist(&source, url))
                 .await
                 .ok_or(RecordError::Cancelled)??
-                .strip_bom();
-            parse_media_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
-                RecordError::Parse(anyhow!(
-                    "Error while parsing media playlist: {}",
-                    e.map_input(|i| String::from_utf8_lossy(i))
-                ))
-            })?
+                .and_then(|raw_playlist| {
+                    let raw_playlist = raw_playlist.strip_bom();
+                    parse_media_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
+                        RecordError::Parse(anyhow!(
+                            "Error while parsing media playlist: {}",
+                            e.map_input(|i| String::from_utf8_lossy(i))
+                        ))
+                    })
+                })?
         };
         let now = Instant::now();
-        let playlist_time = Utc::now();
         let file_name = if previous_playlist.is_none() && media_playlist.end_list {
             // Playlist is a VOD. No need for a timestamp, since we won't ever refresh it.
             rewriter.playlist_path()
@@ -360,7 +372,7 @@ async fn record_media_playlist<S: Source>(
     Ok(())
 }
 
-async fn download_playlist<S: Source>(source: &S, url: &Url) -> Result<String, RecordError> {
+async fn download_playlist<S: Source>(source: &S, url: &Url) -> Result<Timed<String>, RecordError> {
     source
         .request_string(url, None)
         .await

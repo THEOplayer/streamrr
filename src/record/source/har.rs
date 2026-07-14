@@ -1,6 +1,6 @@
 use crate::import::Har;
 use crate::record::Source;
-use crate::shared::ByteRange;
+use crate::shared::{ByteRange, Timed};
 use chrono::{DateTime, Utc};
 use tokio_util::bytes::Bytes;
 use url::Url;
@@ -27,7 +27,7 @@ impl Source for HarSource {
         &self,
         _url: &Url,
         _byte_range: Option<ByteRange>,
-    ) -> Result<Bytes, Self::Error> {
+    ) -> Result<Timed<Bytes>, Self::Error> {
         todo!()
     }
 }

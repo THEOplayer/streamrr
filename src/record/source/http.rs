@@ -1,5 +1,6 @@
 use super::Source;
-use crate::shared::ByteRange;
+use crate::shared::{ByteRange, Timed};
+use chrono::Utc;
 use futures::{Stream, TryStreamExt, future::ready, stream::once};
 use reqwest::{Client, RequestBuilder, Response};
 use tokio_util::bytes::Bytes;
@@ -42,18 +43,24 @@ impl Source for HttpSource {
         &self,
         url: &Url,
         byte_range: Option<ByteRange>,
-    ) -> Result<Bytes, Self::Error> {
+    ) -> Result<Timed<Bytes>, Self::Error> {
         let request = self.build_request(url, byte_range);
-        request.send().await?.bytes().await
+        let response = request.send().await?;
+        let time = Utc::now();
+        let bytes = response.bytes().await?;
+        Ok(Timed { value: bytes, time })
     }
 
     async fn request_string(
         &self,
         url: &Url,
         byte_range: Option<ByteRange>,
-    ) -> Result<String, Self::Error> {
+    ) -> Result<Timed<String>, Self::Error> {
         let request = self.build_request(url, byte_range);
-        request.send().await?.text().await
+        let response = request.send().await?;
+        let time = Utc::now();
+        let text = response.text().await?;
+        Ok(Timed { value: text, time })
     }
 
     async fn request_stream(
