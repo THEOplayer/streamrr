@@ -33,8 +33,9 @@ impl Source for HarSource {
         let entries = &self.har.log.entries;
         let entry = entries
             .iter()
-            .filter(|entry| entry.started_date_time <= self.time)
-            .find(|entry| entry.request.url == url.as_str())
+            .filter(|entry| entry.started_date_time >= self.time)
+            .filter(|entry| entry.request.url == url.as_str())
+            .min_by_key(|entry| entry.started_date_time)
             .ok_or_else(|| anyhow!("Not found: {url}"))?;
         let mut content = entry
             .response
