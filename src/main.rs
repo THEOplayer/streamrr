@@ -4,7 +4,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use tokio::spawn;
 use tokio_util::sync::CancellationToken;
@@ -34,6 +34,48 @@ struct CliRequired {
     cli: Cli,
 }
 
+#[derive(Args)]
+struct RecordOrImportArgs {
+    /// The variant stream(s) to record.
+    #[arg(short = 'v', long, default_value = "first")]
+    variant: VariantSelect,
+    /// The audio renditions(s) to record.
+    #[arg(long, default_value = "default")]
+    audio: MediaSelect,
+    /// The video renditions(s) to record.
+    #[arg(long, default_value = "default")]
+    video: MediaSelect,
+    /// The subtitle renditions(s) to record.
+    #[arg(long, default_value = "default")]
+    subtitle: MediaSelect,
+    /// The maximum bandwidth of the variant stream to record.
+    ///
+    /// Cannot be used when --variant is set.
+    #[arg(short = 'b', long, conflicts_with = "variant")]
+    bandwidth: Option<u64>,
+    /// The start time of the first segment to record, in seconds.
+    ///
+    /// - If positive, the start time counts from the start of the first media playlist.
+    /// - If negative, the start time counts from the end of the first media playlist.
+    /// - If unset, the recording starts at the first segment of the first media playlist.
+    #[arg(long, allow_hyphen_values = true, verbatim_doc_comment)]
+    start: Option<f32>,
+    /// The end time of the first segment to record, in seconds.
+    ///
+    /// - If positive, the end time counts from the start of the first media playlist.
+    /// - If negative, the end time counts from the end of the first media playlist.
+    /// - If unset, the recording stops at the last segment of the last media playlist.
+    #[arg(long, allow_hyphen_values = true, verbatim_doc_comment)]
+    end: Option<f32>,
+    /// Whether to preserve the original file names of playlists and segments.
+    ///
+    /// This may not be compatible with all streams. For example, if the segment URLs
+    /// only differ by their query (e.g. `https://example.com/segment?num=1`),
+    /// then all segments would be written to the same `segment` file.
+    #[arg(long)]
+    keep_names: bool,
+}
+
 #[derive(Subcommand)]
 enum CliCommand {
     /// Record a HLS VOD or live stream.
@@ -44,49 +86,13 @@ enum CliCommand {
         /// The directory path to store the recording of the HLS stream.
         #[arg(value_name = "PATH")]
         recording_path: PathBuf,
-        /// The variant stream(s) to record.
-        #[arg(short = 'v', long, default_value = "first")]
-        variant: VariantSelect,
-        /// The audio renditions(s) to record.
-        #[arg(long, default_value = "default")]
-        audio: MediaSelect,
-        /// The video renditions(s) to record.
-        #[arg(long, default_value = "default")]
-        video: MediaSelect,
-        /// The subtitle renditions(s) to record.
-        #[arg(long, default_value = "default")]
-        subtitle: MediaSelect,
-        /// The maximum bandwidth of the variant stream to record.
-        ///
-        /// Cannot be used when --variant is set.
-        #[arg(short = 'b', long, conflicts_with = "variant")]
-        bandwidth: Option<u64>,
-        /// The start time of the first segment to record, in seconds.
-        ///
-        /// - If positive, the start time counts from the start of the first media playlist.
-        /// - If negative, the start time counts from the end of the first media playlist.
-        /// - If unset, the recording starts at the first segment of the first media playlist.
-        #[arg(long, allow_hyphen_values = true, verbatim_doc_comment)]
-        start: Option<f32>,
-        /// The end time of the first segment to record, in seconds.
-        ///
-        /// - If positive, the end time counts from the start of the first media playlist.
-        /// - If negative, the end time counts from the end of the first media playlist.
-        /// - If unset, the recording stops at the last segment of the last media playlist.
-        #[arg(long, allow_hyphen_values = true, verbatim_doc_comment)]
-        end: Option<f32>,
+        #[command(flatten)]
+        args: RecordOrImportArgs,
         /// Custom HTTP header to send with all requests.
         ///
         /// Can be specified multiple times. Format: "Name: Value"
         #[arg(short = 'H', long = "header", value_name = "Name: Value", value_parser = parse_header)]
         headers: Vec<(HeaderName, HeaderValue)>,
-        /// Whether to preserve the original file names of playlists and segments.
-        ///
-        /// This may not be compatible with all streams. For example, if the segment URLs
-        /// only differ by their query (e.g. `https://example.com/segment?num=1`),
-        /// then all segments would be written to the same `segment` file.
-        #[arg(long)]
-        keep_names: bool,
     },
     /// Replay a HLS VOD or live stream.
     Replay {
@@ -108,44 +114,8 @@ enum CliCommand {
         /// The directory path to store the recording of the HLS stream.
         #[arg(value_name = "PATH")]
         recording_path: PathBuf,
-        /// The variant stream(s) to record.
-        #[arg(short = 'v', long, default_value = "first")]
-        variant: VariantSelect,
-        /// The audio renditions(s) to record.
-        #[arg(long, default_value = "default")]
-        audio: MediaSelect,
-        /// The video renditions(s) to record.
-        #[arg(long, default_value = "default")]
-        video: MediaSelect,
-        /// The subtitle renditions(s) to record.
-        #[arg(long, default_value = "default")]
-        subtitle: MediaSelect,
-        /// The maximum bandwidth of the variant stream to record.
-        ///
-        /// Cannot be used when --variant is set.
-        #[arg(short = 'b', long, conflicts_with = "variant")]
-        bandwidth: Option<u64>,
-        /// The start time of the first segment to record, in seconds.
-        ///
-        /// - If positive, the start time counts from the start of the first media playlist.
-        /// - If negative, the start time counts from the end of the first media playlist.
-        /// - If unset, the recording starts at the first segment of the first media playlist.
-        #[arg(long, allow_hyphen_values = true, verbatim_doc_comment)]
-        start: Option<f32>,
-        /// The end time of the first segment to record, in seconds.
-        ///
-        /// - If positive, the end time counts from the start of the first media playlist.
-        /// - If negative, the end time counts from the end of the first media playlist.
-        /// - If unset, the recording stops at the last segment of the last media playlist.
-        #[arg(long, allow_hyphen_values = true, verbatim_doc_comment)]
-        end: Option<f32>,
-        /// Whether to preserve the original file names of playlists and segments.
-        ///
-        /// This may not be compatible with all streams. For example, if the segment URLs
-        /// only differ by their query (e.g. `https://example.com/segment?num=1`),
-        /// then all segments would be written to the same `segment` file.
-        #[arg(long)]
-        keep_names: bool,
+        #[command(flatten)]
+        args: RecordOrImportArgs,
     },
 }
 
@@ -169,31 +139,16 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Record {
             manifest_url,
             recording_path,
-            variant,
-            audio,
-            video,
-            subtitle,
-            bandwidth,
-            start,
-            end,
+            args,
             headers,
-            keep_names,
         } => {
-            let variant_select = if let Some(bandwidth) = bandwidth {
+            let variant_select = if let Some(bandwidth) = args.bandwidth {
                 VariantSelectOptions::Bandwidth(bandwidth)
             } else {
-                VariantSelectOptions::Named(variant)
+                VariantSelectOptions::Named(args.variant)
             };
-            let options = RecordOptions {
-                start,
-                end,
-                variant_select,
-                audio,
-                video,
-                subtitle,
-                headers: headers.into_iter().collect::<HeaderMap>(),
-                keep_names,
-            };
+            let headers = headers.into_iter().collect::<HeaderMap>();
+            let options = args.into_record_options(variant_select, headers);
             let token = CancellationToken::new();
             let record_task = {
                 let token = token.clone();
@@ -234,30 +189,14 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Import {
             har_path,
             recording_path,
-            variant,
-            audio,
-            video,
-            subtitle,
-            bandwidth,
-            start,
-            end,
-            keep_names,
+            args,
         } => {
-            let variant_select = if let Some(bandwidth) = bandwidth {
+            let variant_select = if let Some(bandwidth) = args.bandwidth {
                 VariantSelectOptions::Bandwidth(bandwidth)
             } else {
-                VariantSelectOptions::Named(variant)
+                VariantSelectOptions::Named(args.variant)
             };
-            let options = RecordOptions {
-                start,
-                end,
-                variant_select,
-                audio,
-                video,
-                subtitle,
-                headers: HeaderMap::new(),
-                keep_names,
-            };
+            let options = args.into_record_options(variant_select, HeaderMap::new());
             let token = CancellationToken::new();
             let har_file = File::open(har_path)?;
             let har = serde_json::from_reader(BufReader::new(har_file))?;
@@ -289,4 +228,23 @@ fn parse_header(s: &str) -> Result<(HeaderName, HeaderValue), String> {
         HeaderName::from_str(name.trim()).map_err(|e| e.to_string())?,
         HeaderValue::from_str(value.trim()).map_err(|e| e.to_string())?,
     ))
+}
+
+impl RecordOrImportArgs {
+    fn into_record_options(
+        self,
+        variant_select: VariantSelectOptions,
+        headers: HeaderMap,
+    ) -> RecordOptions {
+        RecordOptions {
+            start: self.start,
+            end: self.end,
+            variant_select,
+            audio: self.audio,
+            video: self.video,
+            subtitle: self.subtitle,
+            headers,
+            keep_names: self.keep_names,
+        }
+    }
 }
