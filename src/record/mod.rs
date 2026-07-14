@@ -9,12 +9,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::fs;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
-use tokio::time::sleep_until;
 use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -280,7 +279,7 @@ async fn record_master_playlist(
 
 #[allow(clippy::too_many_arguments)]
 async fn record_media_playlist<S: Source>(
-    source: S,
+    mut source: S,
     url: &Url,
     dir: &str,
     mut initial_playlist: Option<Timed<MediaPlaylist>>,
@@ -318,7 +317,6 @@ async fn record_media_playlist<S: Source>(
                     })
                 })?
         };
-        let now = Instant::now();
         let file_name = if previous_playlist.is_none() && media_playlist.end_list {
             // Playlist is a VOD. No need for a timestamp, since we won't ever refresh it.
             rewriter.playlist_path()
@@ -362,9 +360,9 @@ async fn record_media_playlist<S: Source>(
         if media_playlist.end_list {
             break;
         }
-        let next_refresh_time = now + Duration::from_secs(media_playlist.target_duration);
+        let next_refresh_time = playlist_time + Duration::from_secs(media_playlist.target_duration);
         token
-            .run_until_cancelled(sleep_until(next_refresh_time.into()))
+            .run_until_cancelled(source.advance_to_time(next_refresh_time))
             .await
             .ok_or(RecordError::Cancelled)?;
         previous_playlist = Some(media_playlist);

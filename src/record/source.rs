@@ -14,10 +14,14 @@ pub use http::HttpSource;
 pub trait Source: Clone + Send + Sync {
     type Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send;
 
-    /// Set the simulated time for subsequent requests.
-    fn set_request_time(&mut self, _time: DateTime<Utc>) {}
+    /// Advance the current time for subsequent requests.
+    #[allow(unused_variables)]
+    fn advance_to_time(&mut self, time: DateTime<Utc>) -> impl Future<Output = ()> + Send {
+        ready(())
+    }
 
-    /// Request the resource at the given URL.
+    /// Request the resource at the given URL
+    /// as it was at the time set by `advance_to_time`.
     fn request(
         &self,
         url: &Url,
@@ -25,7 +29,7 @@ pub trait Source: Clone + Send + Sync {
     ) -> impl Future<Output = Result<Timed<Bytes>, Self::Error>> + Send;
 
     /// Request the resource at the given URL as a string,
-    /// as it was at the time set by `set_request_time`.
+    /// as it was at the time set by `advance_to_time`.
     fn request_string(
         &self,
         url: &Url,
