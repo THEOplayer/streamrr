@@ -38,6 +38,6 @@ pub async fn import_har(
     // Create a source that reads from the HAR
     let source = HarSource::new(har, time);
 
-    let recorder = Recorder::new(source, dest, options, token).await?;
-    recorder.run(&url).await
+    let recorder = Recorder::new(source, dest, options).await?;
+    recorder.run(&url, token).await
 }
