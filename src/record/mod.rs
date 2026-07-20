@@ -66,32 +66,12 @@ pub async fn record(
         .build()
         .map_err(|_| RecordError::Config("Error while building HTTP client"))?;
     let source = HttpSource::new(client);
-    record_with_source(url, dest, options, source, token).await
-}
-
-pub async fn record_with_source(
-    url: &Url,
-    dest: &Path,
-    options: RecordOptions,
-    source: impl Source + 'static,
-    token: CancellationToken,
-) -> Result<(), RecordError> {
-    fs::create_dir_all(dest).await?;
-    let recording_path = dest.join("recording.json");
-    let recording = RecordingFile::new(&recording_path).await?;
-    let recording = Arc::new(Mutex::new(recording));
-    let recorder = Recorder {
-        source,
-        dest: PathBuf::from(dest),
-        recording,
-        options,
-        token,
-    };
+    let recorder = Recorder::new(source, dest, options, token).await?;
     recorder.run(url).await
 }
 
 #[derive(Clone)]
-struct Recorder<S: Source> {
+pub struct Recorder<S: Source> {
     source: S,
     dest: PathBuf,
     recording: Arc<Mutex<RecordingFile>>,
@@ -100,7 +80,26 @@ struct Recorder<S: Source> {
 }
 
 impl<S: Source + 'static> Recorder<S> {
-    async fn run(mut self, url: &Url) -> Result<(), RecordError> {
+    pub async fn new(
+        source: S,
+        dest: &Path,
+        options: RecordOptions,
+        token: CancellationToken,
+    ) -> Result<Self, RecordError> {
+        fs::create_dir_all(dest).await?;
+        let recording_path = dest.join("recording.json");
+        let recording = RecordingFile::new(&recording_path).await?;
+        let recording = Arc::new(Mutex::new(recording));
+        Ok(Self {
+            source,
+            dest: PathBuf::from(dest),
+            recording,
+            options,
+            token,
+        })
+    }
+
+    pub async fn run(mut self, url: &Url) -> Result<(), RecordError> {
         // Download initial playlist
         let Timed {
             value: initial_playlist,
