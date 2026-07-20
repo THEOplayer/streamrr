@@ -143,64 +143,12 @@ impl<S: Source + 'static> Recorder<S> {
         let rewriter = Rewriter::new(url, &self.dest, self.options.keep_names);
         rewriter.rewrite_master_playlist(&mut master_playlist)?;
 
-        // Select variant streams
-        master_playlist.variants = self
-            .options
-            .variant_select
-            .filter_variants(&master_playlist.variants)
-            .to_vec();
+        // Select variant streams and renditions
+        self.select_variants(&mut master_playlist);
         if master_playlist.variants.is_empty() {
             return Err(RecordError::Config("No variant streams selected."));
         }
-        // Select renditions
-        let alternatives = &mut master_playlist.alternatives;
-        alternatives.retain(|media| {
-            // Must apply to at least one selected variant stream
-            master_playlist
-                .variants
-                .iter()
-                .any(|variant| media_applies_to_variant(media, variant))
-        });
-        let audio_renditions = alternatives
-            .iter()
-            .filter(|media| media.media_type == AlternativeMediaType::Audio)
-            .cloned()
-            .collect::<Vec<_>>();
-        let video_renditions = alternatives
-            .iter()
-            .filter(|media| media.media_type == AlternativeMediaType::Video)
-            .cloned()
-            .collect::<Vec<_>>();
-        let subtitle_renditions = alternatives
-            .iter()
-            .filter(|media| media.media_type == AlternativeMediaType::Subtitles)
-            .cloned()
-            .collect::<Vec<_>>();
-        let cc_renditions = alternatives
-            .iter()
-            .filter(|media| media.media_type == AlternativeMediaType::ClosedCaptions)
-            .cloned()
-            .collect::<Vec<_>>();
-        let other_renditions = alternatives
-            .iter()
-            .filter(|media| matches!(media.media_type, AlternativeMediaType::Other(_)))
-            .cloned()
-            .collect::<Vec<_>>();
-
-        let audio_renditions = self.options.audio.filter_media(&audio_renditions).to_vec();
-        let video_renditions = self.options.video.filter_media(&video_renditions).to_vec();
-        let subtitle_renditions = self
-            .options
-            .subtitle
-            .filter_media(&subtitle_renditions)
-            .to_vec();
-
-        master_playlist.alternatives = audio_renditions;
-        master_playlist.alternatives.extend(video_renditions);
-        master_playlist.alternatives.extend(subtitle_renditions);
-        master_playlist.alternatives.extend(cc_renditions);
-        master_playlist.alternatives.extend(other_renditions);
-
+        self.select_renditions(&mut master_playlist);
         let master_playlist = master_playlist;
 
         // Start recording selected variant streams and renditions
@@ -263,6 +211,64 @@ impl<S: Source + 'static> Recorder<S> {
             res.map_err(|_| RecordError::Cancelled)??;
         }
         Ok(())
+    }
+
+    fn select_variants(&self, master_playlist: &mut MasterPlaylist) {
+        master_playlist.variants = self
+            .options
+            .variant_select
+            .filter_variants(&master_playlist.variants)
+            .to_vec();
+    }
+
+    fn select_renditions(&self, master_playlist: &mut MasterPlaylist) {
+        let alternatives = &mut master_playlist.alternatives;
+        alternatives.retain(|media| {
+            // Must apply to at least one selected variant stream
+            master_playlist
+                .variants
+                .iter()
+                .any(|variant| media_applies_to_variant(media, variant))
+        });
+        let audio_renditions = alternatives
+            .iter()
+            .filter(|media| media.media_type == AlternativeMediaType::Audio)
+            .cloned()
+            .collect::<Vec<_>>();
+        let video_renditions = alternatives
+            .iter()
+            .filter(|media| media.media_type == AlternativeMediaType::Video)
+            .cloned()
+            .collect::<Vec<_>>();
+        let subtitle_renditions = alternatives
+            .iter()
+            .filter(|media| media.media_type == AlternativeMediaType::Subtitles)
+            .cloned()
+            .collect::<Vec<_>>();
+        let cc_renditions = alternatives
+            .iter()
+            .filter(|media| media.media_type == AlternativeMediaType::ClosedCaptions)
+            .cloned()
+            .collect::<Vec<_>>();
+        let other_renditions = alternatives
+            .iter()
+            .filter(|media| matches!(media.media_type, AlternativeMediaType::Other(_)))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let audio_renditions = self.options.audio.filter_media(&audio_renditions).to_vec();
+        let video_renditions = self.options.video.filter_media(&video_renditions).to_vec();
+        let subtitle_renditions = self
+            .options
+            .subtitle
+            .filter_media(&subtitle_renditions)
+            .to_vec();
+
+        master_playlist.alternatives = audio_renditions;
+        master_playlist.alternatives.extend(video_renditions);
+        master_playlist.alternatives.extend(subtitle_renditions);
+        master_playlist.alternatives.extend(cc_renditions);
+        master_playlist.alternatives.extend(other_renditions);
     }
 
     async fn record_media_playlist(
