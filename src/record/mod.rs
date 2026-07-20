@@ -66,8 +66,8 @@ pub async fn record(
         .build()
         .map_err(|_| RecordError::Config("Error while building HTTP client"))?;
     let source = HttpSource::new(client);
-    let recorder = Recorder::new(source, dest, options, token).await?;
-    recorder.run(url).await
+    let recorder = Recorder::new(source, dest, options).await?;
+    recorder.run(url, token).await
 }
 
 #[derive(Clone)]
@@ -76,16 +76,10 @@ pub struct Recorder<S: Source> {
     dest: PathBuf,
     recording: Arc<Mutex<RecordingFile>>,
     options: RecordOptions,
-    token: CancellationToken,
 }
 
 impl<S: Source + 'static> Recorder<S> {
-    pub async fn new(
-        source: S,
-        dest: &Path,
-        options: RecordOptions,
-        token: CancellationToken,
-    ) -> Result<Self, RecordError> {
+    pub async fn new(source: S, dest: &Path, options: RecordOptions) -> Result<Self, RecordError> {
         fs::create_dir_all(dest).await?;
         let recording_path = dest.join("recording.json");
         let recording = RecordingFile::new(&recording_path).await?;
@@ -95,17 +89,15 @@ impl<S: Source + 'static> Recorder<S> {
             dest: PathBuf::from(dest),
             recording,
             options,
-            token,
         })
     }
 
-    pub async fn run(mut self, url: &Url) -> Result<(), RecordError> {
+    pub async fn run(mut self, url: &Url, token: CancellationToken) -> Result<(), RecordError> {
         // Download initial playlist
         let Timed {
             value: initial_playlist,
             time: playlist_time,
-        } = self
-            .token
+        } = token
             .run_until_cancelled(download_playlist(&self.source, url))
             .await
             .ok_or(RecordError::Cancelled)??
@@ -121,7 +113,8 @@ impl<S: Source + 'static> Recorder<S> {
         match initial_playlist {
             Playlist::MasterPlaylist(master_playlist) => {
                 // Master playlist
-                self.record_master_playlist(url, master_playlist).await?;
+                self.record_master_playlist(url, master_playlist, token)
+                    .await?;
             }
             Playlist::MediaPlaylist(media_playlist) => {
                 // Media playlist only
@@ -132,6 +125,7 @@ impl<S: Source + 'static> Recorder<S> {
                         value: media_playlist,
                         time: playlist_time,
                     }),
+                    token,
                 )
                 .await?;
             }
@@ -143,6 +137,7 @@ impl<S: Source + 'static> Recorder<S> {
         &self,
         url: &Url,
         mut master_playlist: MasterPlaylist,
+        token: CancellationToken,
     ) -> Result<(), RecordError> {
         // Rewrite master playlist
         let rewriter = Rewriter::new(url, &self.dest, self.options.keep_names);
@@ -224,9 +219,10 @@ impl<S: Source + 'static> Recorder<S> {
                 .to_string_lossy()
                 .to_string();
             let mut recorder = self.clone();
+            let token = token.clone();
             join_set.spawn(async move {
                 recorder
-                    .record_media_playlist(&variant_url, &variant_dir, None)
+                    .record_media_playlist(&variant_url, &variant_dir, None, token)
                     .await
             });
         }
@@ -247,9 +243,10 @@ impl<S: Source + 'static> Recorder<S> {
                 .to_string_lossy()
                 .to_string();
             let mut recorder = self.clone();
+            let token = token.clone();
             join_set.spawn(async move {
                 recorder
-                    .record_media_playlist(&media_url, &media_dir, None)
+                    .record_media_playlist(&media_url, &media_dir, None, token)
                     .await
             });
         }
@@ -273,6 +270,7 @@ impl<S: Source + 'static> Recorder<S> {
         url: &Url,
         dir: &str,
         mut initial_playlist: Option<Timed<MediaPlaylist>>,
+        token: CancellationToken,
     ) -> Result<(), RecordError> {
         let dest_dir = self.dest.join(dir);
         fs::create_dir_all(&dest_dir).await?;
@@ -289,7 +287,7 @@ impl<S: Source + 'static> Recorder<S> {
             } = if let Some(playlist) = initial_playlist.take() {
                 playlist
             } else {
-                self.token
+                token
                     .run_until_cancelled(download_playlist(&self.source, url))
                     .await
                     .ok_or(RecordError::Cancelled)??
@@ -340,7 +338,7 @@ impl<S: Source + 'static> Recorder<S> {
                 &media_playlist.segments,
                 &dest_dir,
                 MAX_CONCURRENT_DOWNLOADS,
-                self.token.clone(),
+                token.clone(),
             )
             .await?;
             // Refresh playlist
@@ -349,7 +347,7 @@ impl<S: Source + 'static> Recorder<S> {
             }
             let next_refresh_time =
                 playlist_time + Duration::from_secs(media_playlist.target_duration);
-            self.token
+            token
                 .run_until_cancelled(self.source.advance_to_time(next_refresh_time))
                 .await
                 .ok_or(RecordError::Cancelled)?;
