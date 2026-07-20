@@ -1,6 +1,6 @@
 mod har;
 
-use crate::record::{HarSource, RecordError, RecordOptions, record_with_source};
+use crate::record::{HarSource, RecordError, RecordOptions, Recorder};
 use crate::shared::url_file_extension;
 use anyhow::anyhow;
 pub(crate) use har::Har;
@@ -38,5 +38,6 @@ pub async fn import_har(
     // Create a source that reads from the HAR
     let source = HarSource::new(har, time);
 
-    record_with_source(&url, dest, options, source, token).await
+    let recorder = Recorder::new(source, dest, options, token).await?;
+    recorder.run(&url).await
 }
