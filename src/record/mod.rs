@@ -1,27 +1,29 @@
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
-use futures::future::{BoxFuture, FutureExt, TryFutureExt};
+use futures::future::{BoxFuture, FutureExt};
 use futures::stream::{StreamExt, TryStreamExt, iter};
 use m3u8_rs::*;
+use reqwest::Client;
 use reqwest::header::HeaderMap;
-use reqwest::{Client, Response};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::pin;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::fs;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
-use tokio::time::sleep_until;
 use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::shared::{ByteRange, MediaSelect, Recording, StripBom, VariantSelectOptions};
+use crate::shared::{ByteRange, MediaSelect, Recording, StripBom, Timed, VariantSelectOptions};
 pub use rewrite::*;
+pub use source::*;
 
 mod rewrite;
+mod source;
 
 const MAX_CONCURRENT_DOWNLOADS: usize = 4;
 
@@ -58,299 +60,312 @@ pub async fn record(
     options: RecordOptions,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
-    fs::create_dir_all(dest).await?;
-    let recording_path = dest.join("recording.json");
-    let recording = RecordingFile::new(&recording_path).await?;
-    let recording = Arc::new(Mutex::new(recording));
     let client = Client::builder()
         .cookie_store(true)
         .default_headers(options.headers.clone())
         .build()
         .map_err(|_| RecordError::Config("Error while building HTTP client"))?;
-    // Download initial playlist
-    let raw_playlist = token
-        .run_until_cancelled(download_playlist(&client, url))
-        .await
-        .ok_or(RecordError::Cancelled)??
-        .strip_bom();
-    let initial_playlist = parse_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
-        RecordError::Parse(anyhow!(
-            "Error while parsing playlist: {}",
-            e.map_input(|i| String::from_utf8_lossy(i))
-        ))
-    })?;
-    match initial_playlist {
-        Playlist::MasterPlaylist(master_playlist) => {
-            // Master playlist
-            record_master_playlist(
-                &client,
-                url,
-                dest,
-                recording,
-                options,
-                master_playlist,
-                token,
-            )
-            .await?;
-        }
-        Playlist::MediaPlaylist(media_playlist) => {
-            // Media playlist only
-            record_media_playlist(
-                &client,
-                url,
-                "",
-                Some(media_playlist),
-                dest,
-                recording,
-                options,
-                token,
-            )
-            .await?;
-        }
-    }
-    Ok(())
+    let source = HttpSource::new(client);
+    let recorder = Recorder::new(source, dest, options).await?;
+    recorder.run(url, token).await
 }
 
-async fn record_master_playlist(
-    client: &Client,
-    url: &Url,
-    dest: &Path,
+#[derive(Clone)]
+pub struct Recorder<S: Source> {
+    source: S,
+    dest: PathBuf,
     recording: Arc<Mutex<RecordingFile>>,
     options: RecordOptions,
-    mut master_playlist: MasterPlaylist,
-    token: CancellationToken,
-) -> Result<(), RecordError> {
-    // Rewrite master playlist
-    let rewriter = Rewriter::new(url, dest, options.keep_names);
-    rewriter.rewrite_master_playlist(&mut master_playlist)?;
-
-    // Select variant streams
-    master_playlist.variants = options
-        .variant_select
-        .filter_variants(&master_playlist.variants)
-        .to_vec();
-    if master_playlist.variants.is_empty() {
-        return Err(RecordError::Config("No variant streams selected."));
-    }
-    // Select renditions
-    let alternatives = &mut master_playlist.alternatives;
-    alternatives.retain(|media| {
-        // Must apply to at least one selected variant stream
-        master_playlist
-            .variants
-            .iter()
-            .any(|variant| media_applies_to_variant(media, variant))
-    });
-    let audio_renditions = alternatives
-        .iter()
-        .filter(|media| media.media_type == AlternativeMediaType::Audio)
-        .cloned()
-        .collect::<Vec<_>>();
-    let video_renditions = alternatives
-        .iter()
-        .filter(|media| media.media_type == AlternativeMediaType::Video)
-        .cloned()
-        .collect::<Vec<_>>();
-    let subtitle_renditions = alternatives
-        .iter()
-        .filter(|media| media.media_type == AlternativeMediaType::Subtitles)
-        .cloned()
-        .collect::<Vec<_>>();
-    let cc_renditions = alternatives
-        .iter()
-        .filter(|media| media.media_type == AlternativeMediaType::ClosedCaptions)
-        .cloned()
-        .collect::<Vec<_>>();
-    let other_renditions = alternatives
-        .iter()
-        .filter(|media| matches!(media.media_type, AlternativeMediaType::Other(_)))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let audio_renditions = options.audio.filter_media(&audio_renditions).to_vec();
-    let video_renditions = options.video.filter_media(&video_renditions).to_vec();
-    let subtitle_renditions = options.subtitle.filter_media(&subtitle_renditions).to_vec();
-
-    master_playlist.alternatives = audio_renditions;
-    master_playlist.alternatives.extend(video_renditions);
-    master_playlist.alternatives.extend(subtitle_renditions);
-    master_playlist.alternatives.extend(cc_renditions);
-    master_playlist.alternatives.extend(other_renditions);
-
-    let master_playlist = master_playlist;
-
-    // Start recording selected variant streams and renditions
-    let mut join_set = JoinSet::new();
-    for variant in &master_playlist.variants {
-        let Some(other_attributes) = &variant.other_attributes else {
-            continue;
-        };
-        let Some(variant_url) = other_attributes.get(ORIGINAL_URI) else {
-            continue;
-        };
-        let variant_url = Url::parse(variant_url.as_str()).unwrap();
-        let variant_dir = Path::new(&variant.uri)
-            .parent()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        let client = client.clone();
-        let dest = PathBuf::from(dest);
-        let recording = recording.clone();
-        let options = options.clone();
-        let token = token.clone();
-        join_set.spawn(async move {
-            record_media_playlist(
-                &client,
-                &variant_url,
-                &variant_dir,
-                None,
-                &dest,
-                recording,
-                options,
-                token,
-            )
-            .await
-        });
-    }
-    for media in &master_playlist.alternatives {
-        let Some(media_uri) = &media.uri else {
-            continue;
-        };
-        let Some(other_attributes) = &media.other_attributes else {
-            continue;
-        };
-        let Some(media_url) = other_attributes.get(ORIGINAL_URI) else {
-            continue;
-        };
-        let media_url = Url::parse(media_url.as_str()).unwrap();
-        let media_dir = Path::new(media_uri)
-            .parent()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        let client = client.clone();
-        let dest = PathBuf::from(dest);
-        let recording = recording.clone();
-        let options = options.clone();
-        let token = token.clone();
-        join_set.spawn(async move {
-            record_media_playlist(
-                &client, &media_url, &media_dir, None, &dest, recording, options, token,
-            )
-            .await
-        });
-    }
-    // Write updated master playlist
-    let master_name = "index.m3u8";
-    write_master_playlist(&dest.join(master_name), &master_playlist).await?;
-    recording
-        .lock()
-        .await
-        .add_and_save(Utc::now(), master_name, master_name.to_string())
-        .await?;
-    // Wait for all tasks to complete
-    while let Some(res) = join_set.join_next().await {
-        res.map_err(|_| RecordError::Cancelled)??;
-    }
-    Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn record_media_playlist(
-    client: &Client,
-    url: &Url,
-    dir: &str,
-    mut initial_playlist: Option<MediaPlaylist>,
-    dest: &Path,
-    recording: Arc<Mutex<RecordingFile>>,
-    mut options: RecordOptions,
-    token: CancellationToken,
-) -> Result<(), RecordError> {
-    let dest_dir = dest.join(dir);
-    fs::create_dir_all(&dest_dir).await?;
-    let mut rewriter = Rewriter::new(url, dir.as_ref(), options.keep_names);
-    let name_in_recording = rewriter.playlist_path();
-    let mut previous_playlist = None;
-    let mut lowest_media_sequence = 0;
-    let mut highest_media_sequence = None;
-    loop {
-        // Download and rewrite playlist
-        let mut media_playlist = if let Some(playlist) = initial_playlist.take() {
-            playlist
-        } else {
-            let raw_playlist = token
-                .run_until_cancelled(download_playlist(client, url))
-                .await
-                .ok_or(RecordError::Cancelled)??
-                .strip_bom();
-            parse_media_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
-                RecordError::Parse(anyhow!(
-                    "Error while parsing media playlist: {}",
-                    e.map_input(|i| String::from_utf8_lossy(i))
-                ))
-            })?
-        };
-        let now = Instant::now();
-        let playlist_time = Utc::now();
-        let file_name = if previous_playlist.is_none() && media_playlist.end_list {
-            // Playlist is a VOD. No need for a timestamp, since we won't ever refresh it.
-            rewriter.playlist_path()
-        } else {
-            // Playlist is live, or was live and has now ended
-            rewriter.playlist_path_with_timestamp(&playlist_time)
-        };
-        // Clip to start and end time (if given)
-        if let Some(start) = options.start.take()
-            && let Some(start_index) = find_segment_index_by_offset(&media_playlist.segments, start)
-        {
-            lowest_media_sequence = media_playlist.media_sequence + (start_index as u64)
+impl<S: Source + 'static> Recorder<S> {
+    pub async fn new(source: S, dest: &Path, options: RecordOptions) -> Result<Self, RecordError> {
+        fs::create_dir_all(dest).await?;
+        let recording_path = dest.join("recording.json");
+        let recording = RecordingFile::new(&recording_path).await?;
+        let recording = Arc::new(Mutex::new(recording));
+        Ok(Self {
+            source,
+            dest: PathBuf::from(dest),
+            recording,
+            options,
+        })
+    }
+
+    pub async fn run(mut self, url: &Url, token: CancellationToken) -> Result<(), RecordError> {
+        // Download initial playlist
+        let Timed {
+            value: initial_playlist,
+            time: playlist_time,
+        } = token
+            .run_until_cancelled(download_playlist(&self.source, url))
+            .await
+            .ok_or(RecordError::Cancelled)??
+            .and_then(|raw_playlist| {
+                let raw_playlist = raw_playlist.strip_bom();
+                parse_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
+                    RecordError::Parse(anyhow!(
+                        "Error while parsing playlist: {}",
+                        e.map_input(|i| String::from_utf8_lossy(i))
+                    ))
+                })
+            })?;
+        match initial_playlist {
+            Playlist::MasterPlaylist(master_playlist) => {
+                // Master playlist
+                self.record_master_playlist(url, master_playlist, token)
+                    .await?;
+            }
+            Playlist::MediaPlaylist(media_playlist) => {
+                // Media playlist only
+                self.record_media_playlist(
+                    url,
+                    "",
+                    Some(Timed {
+                        value: media_playlist,
+                        time: playlist_time,
+                    }),
+                    token,
+                )
+                .await?;
+            }
         }
-        if let Some(end) = options.end.take()
-            && let Some(end_index) = find_segment_index_by_offset(&media_playlist.segments, end)
-        {
-            highest_media_sequence = Some(media_playlist.media_sequence + (end_index as u64))
+        Ok(())
+    }
+
+    async fn record_master_playlist(
+        &self,
+        url: &Url,
+        mut master_playlist: MasterPlaylist,
+        token: CancellationToken,
+    ) -> Result<(), RecordError> {
+        // Rewrite master playlist
+        let rewriter = Rewriter::new(url, &self.dest, self.options.keep_names);
+        rewriter.rewrite_master_playlist(&mut master_playlist)?;
+
+        // Select variant streams and renditions
+        self.select_variants(&mut master_playlist);
+        if master_playlist.variants.is_empty() {
+            return Err(RecordError::Config("No variant streams selected."));
         }
-        remove_segments_from_start(&mut media_playlist, lowest_media_sequence);
-        if let Some(highest_media_sequence) = highest_media_sequence {
-            remove_segments_from_end(&mut media_playlist, highest_media_sequence);
+        self.select_renditions(&mut master_playlist);
+        let master_playlist = master_playlist;
+
+        // Start recording selected variant streams and renditions
+        let mut join_set = JoinSet::new();
+        for variant in &master_playlist.variants {
+            let Some(other_attributes) = &variant.other_attributes else {
+                continue;
+            };
+            let Some(variant_url) = other_attributes.get(ORIGINAL_URI) else {
+                continue;
+            };
+            let variant_url = Url::parse(variant_url.as_str()).unwrap();
+            let variant_dir = Path::new(&variant.uri)
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let mut recorder = self.clone();
+            let token = token.clone();
+            join_set.spawn(async move {
+                recorder
+                    .record_media_playlist(&variant_url, &variant_dir, None, token)
+                    .await
+            });
         }
-        rewriter.rewrite_media_playlist(&mut media_playlist)?;
-        write_media_playlist(&dest.join(&file_name), &media_playlist).await?;
-        // Update recording
-        recording
+        for media in &master_playlist.alternatives {
+            let Some(media_uri) = &media.uri else {
+                continue;
+            };
+            let Some(other_attributes) = &media.other_attributes else {
+                continue;
+            };
+            let Some(media_url) = other_attributes.get(ORIGINAL_URI) else {
+                continue;
+            };
+            let media_url = Url::parse(media_url.as_str()).unwrap();
+            let media_dir = Path::new(media_uri)
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let mut recorder = self.clone();
+            let token = token.clone();
+            join_set.spawn(async move {
+                recorder
+                    .record_media_playlist(&media_url, &media_dir, None, token)
+                    .await
+            });
+        }
+        // Write updated master playlist
+        let master_name = "index.m3u8";
+        write_master_playlist(&self.dest.join(master_name), &master_playlist).await?;
+        self.recording
             .lock()
             .await
-            .add_and_save(playlist_time, &name_in_recording, file_name.to_string())
+            .add_and_save(Utc::now(), master_name, master_name.to_string())
             .await?;
-        // Download segments
-        download_segments(
-            client,
-            &media_playlist.segments,
-            &dest_dir,
-            MAX_CONCURRENT_DOWNLOADS,
-            token.clone(),
-        )
-        .await?;
-        // Refresh playlist
-        if media_playlist.end_list {
-            break;
+        // Wait for all tasks to complete
+        while let Some(res) = join_set.join_next().await {
+            res.map_err(|_| RecordError::Cancelled)??;
         }
-        let next_refresh_time = now + Duration::from_secs(media_playlist.target_duration);
-        token
-            .run_until_cancelled(sleep_until(next_refresh_time.into()))
-            .await
-            .ok_or(RecordError::Cancelled)?;
-        previous_playlist = Some(media_playlist);
+        Ok(())
     }
-    Ok(())
+
+    fn select_variants(&self, master_playlist: &mut MasterPlaylist) {
+        master_playlist.variants = self
+            .options
+            .variant_select
+            .filter_variants(&master_playlist.variants)
+            .to_vec();
+    }
+
+    fn select_renditions(&self, master_playlist: &mut MasterPlaylist) {
+        let alternatives = &mut master_playlist.alternatives;
+        alternatives.retain(|media| {
+            // Must apply to at least one selected variant stream
+            master_playlist
+                .variants
+                .iter()
+                .any(|variant| media_applies_to_variant(media, variant))
+        });
+        let audio_renditions = alternatives
+            .iter()
+            .filter(|media| media.media_type == AlternativeMediaType::Audio)
+            .cloned()
+            .collect::<Vec<_>>();
+        let video_renditions = alternatives
+            .iter()
+            .filter(|media| media.media_type == AlternativeMediaType::Video)
+            .cloned()
+            .collect::<Vec<_>>();
+        let subtitle_renditions = alternatives
+            .iter()
+            .filter(|media| media.media_type == AlternativeMediaType::Subtitles)
+            .cloned()
+            .collect::<Vec<_>>();
+        let cc_renditions = alternatives
+            .iter()
+            .filter(|media| media.media_type == AlternativeMediaType::ClosedCaptions)
+            .cloned()
+            .collect::<Vec<_>>();
+        let other_renditions = alternatives
+            .iter()
+            .filter(|media| matches!(media.media_type, AlternativeMediaType::Other(_)))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let audio_renditions = self.options.audio.filter_media(&audio_renditions).to_vec();
+        let video_renditions = self.options.video.filter_media(&video_renditions).to_vec();
+        let subtitle_renditions = self
+            .options
+            .subtitle
+            .filter_media(&subtitle_renditions)
+            .to_vec();
+
+        master_playlist.alternatives = audio_renditions;
+        master_playlist.alternatives.extend(video_renditions);
+        master_playlist.alternatives.extend(subtitle_renditions);
+        master_playlist.alternatives.extend(cc_renditions);
+        master_playlist.alternatives.extend(other_renditions);
+    }
+
+    async fn record_media_playlist(
+        &mut self,
+        url: &Url,
+        dir: &str,
+        mut initial_playlist: Option<Timed<MediaPlaylist>>,
+        token: CancellationToken,
+    ) -> Result<(), RecordError> {
+        let dest_dir = self.dest.join(dir);
+        fs::create_dir_all(&dest_dir).await?;
+        let mut rewriter = Rewriter::new(url, dir.as_ref(), self.options.keep_names);
+        let name_in_recording = rewriter.playlist_path();
+        let mut previous_playlist = None;
+        let mut lowest_media_sequence = 0;
+        let mut highest_media_sequence = None;
+        loop {
+            // Download and rewrite playlist
+            let Timed {
+                value: mut media_playlist,
+                time: playlist_time,
+            } = if let Some(playlist) = initial_playlist.take() {
+                playlist
+            } else {
+                token
+                    .run_until_cancelled(download_playlist(&self.source, url))
+                    .await
+                    .ok_or(RecordError::Cancelled)??
+                    .and_then(|raw_playlist| {
+                        let raw_playlist = raw_playlist.strip_bom();
+                        parse_media_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
+                            RecordError::Parse(anyhow!(
+                                "Error while parsing media playlist: {}",
+                                e.map_input(|i| String::from_utf8_lossy(i))
+                            ))
+                        })
+                    })?
+            };
+            let file_name = if previous_playlist.is_none() && media_playlist.end_list {
+                // Playlist is a VOD. No need for a timestamp, since we won't ever refresh it.
+                rewriter.playlist_path()
+            } else {
+                // Playlist is live, or was live and has now ended
+                rewriter.playlist_path_with_timestamp(&playlist_time)
+            };
+            // Clip to start and end time (if given)
+            if let Some(start) = self.options.start.take()
+                && let Some(start_index) =
+                    find_segment_index_by_offset(&media_playlist.segments, start)
+            {
+                lowest_media_sequence = media_playlist.media_sequence + (start_index as u64)
+            }
+            if let Some(end) = self.options.end.take()
+                && let Some(end_index) = find_segment_index_by_offset(&media_playlist.segments, end)
+            {
+                highest_media_sequence = Some(media_playlist.media_sequence + (end_index as u64))
+            }
+            remove_segments_from_start(&mut media_playlist, lowest_media_sequence);
+            if let Some(highest_media_sequence) = highest_media_sequence {
+                remove_segments_from_end(&mut media_playlist, highest_media_sequence);
+            }
+            rewriter.rewrite_media_playlist(&mut media_playlist)?;
+            write_media_playlist(&self.dest.join(&file_name), &media_playlist).await?;
+            // Update recording
+            self.recording
+                .lock()
+                .await
+                .add_and_save(playlist_time, &name_in_recording, file_name.to_string())
+                .await?;
+            // Download segments
+            download_segments(
+                &self.source,
+                &media_playlist.segments,
+                &dest_dir,
+                MAX_CONCURRENT_DOWNLOADS,
+                token.clone(),
+            )
+            .await?;
+            // Refresh playlist
+            if media_playlist.end_list {
+                break;
+            }
+            let next_refresh_time =
+                playlist_time + Duration::from_secs(media_playlist.target_duration);
+            token
+                .run_until_cancelled(self.source.advance_to_time(next_refresh_time))
+                .await
+                .ok_or(RecordError::Cancelled)?;
+            previous_playlist = Some(media_playlist);
+        }
+        Ok(())
+    }
 }
 
-async fn download_playlist(client: &Client, url: &Url) -> Result<String, RecordError> {
-    client
-        .get(url.clone())
-        .send()
-        .and_then(Response::text)
+async fn download_playlist<S: Source>(source: &S, url: &Url) -> Result<Timed<String>, RecordError> {
+    source
+        .request_string(url, None)
         .await
         .map_err(|e| RecordError::Io(io::Error::other(e)))
 }
@@ -401,8 +416,8 @@ fn find_segment_index_by_offset(segments: &[MediaSegment], offset: f32) -> Optio
     }
 }
 
-async fn download_segments(
-    client: &Client,
+async fn download_segments<S: Source>(
+    source: &S,
     media_segments: &[MediaSegment],
     dir: &Path,
     max_concurrent_downloads: usize,
@@ -410,7 +425,7 @@ async fn download_segments(
 ) -> Result<(), RecordError> {
     let segment_tasks = media_segments
         .iter()
-        .flat_map(|segment| make_segment_download_tasks(client, dir, segment, token.clone()));
+        .flat_map(|segment| make_segment_download_tasks(source, dir, segment, token.clone()));
     iter(segment_tasks)
         .boxed() // https://github.com/rust-lang/rust/issues/104382
         .buffered(max_concurrent_downloads)
@@ -418,25 +433,25 @@ async fn download_segments(
         .await
 }
 
-fn make_segment_download_tasks<'a>(
-    client: &'a Client,
+fn make_segment_download_tasks<'a, S: Source>(
+    source: &'a S,
     dir: &'a Path,
     segment: &'a MediaSegment,
     token: CancellationToken,
 ) -> Vec<BoxFuture<'a, Result<(), RecordError>>> {
     let mut tasks = Vec::with_capacity(3);
-    tasks.push(download_segment(client, segment, dir, token.clone()).boxed());
+    tasks.push(download_segment(source, segment, dir, token.clone()).boxed());
     if let Some(key) = segment.key.as_ref() {
-        tasks.push(download_key(client, key, segment, dir, token.clone()).boxed());
+        tasks.push(download_key(source, key, segment, dir, token.clone()).boxed());
     }
     if let Some(map) = segment.map.as_ref() {
-        tasks.push(download_map(client, map, segment, dir, token).boxed());
+        tasks.push(download_map(source, map, segment, dir, token).boxed());
     }
     tasks
 }
 
-async fn download_segment(
-    client: &Client,
+async fn download_segment<S: Source>(
+    source: &S,
     media_segment: &MediaSegment,
     dir: &Path,
     token: CancellationToken,
@@ -460,7 +475,7 @@ async fn download_segment(
         })?;
     let segment_file = &media_segment.uri;
     download_file(
-        client,
+        source,
         segment_url,
         segment_byte_range,
         segment_file,
@@ -470,8 +485,8 @@ async fn download_segment(
     .await
 }
 
-async fn download_key(
-    client: &Client,
+async fn download_key<S: Source>(
+    source: &S,
     key: &Key,
     media_segment: &MediaSegment,
     dir: &Path,
@@ -487,7 +502,7 @@ async fn download_key(
     let key_uri = original_key_tag.rest.as_ref().unwrap();
     let key_file = key.uri.as_ref().unwrap();
     download_file(
-        client,
+        source,
         key_uri.as_str(),
         None,
         key_file.as_str(),
@@ -497,8 +512,8 @@ async fn download_key(
     .await
 }
 
-async fn download_map(
-    client: &Client,
+async fn download_map<S: Source>(
+    source: &S,
     map: &Map,
     media_segment: &MediaSegment,
     dir: &Path,
@@ -522,7 +537,7 @@ async fn download_map(
         })?;
     let map_file = &map.uri;
     download_file(
-        client,
+        source,
         map_uri.as_str(),
         map_byte_range,
         map_file,
@@ -532,8 +547,8 @@ async fn download_map(
     .await
 }
 
-async fn download_file(
-    client: &Client,
+async fn download_file<S: Source>(
+    source: &S,
     url: &str,
     byte_range: Option<ByteRange>,
     file_name: &str,
@@ -551,26 +566,15 @@ async fn download_file(
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
         Err(err) => return Err(err.into()),
     };
-    let range_header = byte_range.map(|byte_range| {
-        let start = byte_range.offset;
-        let end = start + byte_range.length - 1; // end byte for a range request is inclusive!
-        format!("bytes={start}-{end}")
-    });
-    println!(
-        "Download: {url} {}",
-        range_header.as_ref().unwrap_or(&String::new())
-    );
-    let mut request = client.get(url);
-    if let Some(range_header) = range_header {
-        request = request.header(reqwest::header::RANGE, range_header);
-    }
-    let response = token
-        .run_until_cancelled(request.send())
+    let url = url
+        .parse::<Url>()
+        .map_err(|e| RecordError::Parse(anyhow!("Invalid URL: {e}")))?;
+    let response_stream = token
+        .run_until_cancelled(source.request_stream(&url, byte_range))
         .await
         .ok_or(RecordError::Cancelled)?
-        .map_err(|e| RecordError::Io(io::Error::other(e)))?;
-    let response_stream = response.bytes_stream().map_err(io::Error::other);
-    let mut response_stream = StreamReader::new(response_stream);
+        .map_err(io::Error::other);
+    let mut response_stream = pin!(StreamReader::new(response_stream));
     tokio::io::copy_buf(&mut response_stream, &mut file).await?;
     Ok(())
 }
@@ -634,34 +638,34 @@ mod tests {
     fn require_async_fn_to_be_send() {
         let url = Url::parse("https://a.com/").unwrap();
         let path = Path::new("");
-        let client = Client::new();
+        let source = HttpSource::new(Client::new());
         let token = CancellationToken::new();
 
         fn require_send<T: Send>(_t: T) {}
-        require_send(download_playlist(&client, &url));
+        require_send(download_playlist(&source, &url));
         require_send(write_master_playlist(path, &MasterPlaylist::default()));
         require_send(write_media_playlist(path, &MediaPlaylist::default()));
-        require_send(download_segments(&client, &[], path, 0, token.clone()));
+        require_send(download_segments(&source, &[], path, 0, token.clone()));
         require_send(download_segment(
-            &client,
+            &source,
             &MediaSegment::empty(),
             path,
             token.clone(),
         ));
         require_send(download_key(
-            &client,
+            &source,
             &Key::default(),
             &MediaSegment::empty(),
             path,
             token.clone(),
         ));
         require_send(download_map(
-            &client,
+            &source,
             &Map::default(),
             &MediaSegment::empty(),
             path,
             token.clone(),
         ));
-        require_send(download_file(&client, "", None, "", path, token.clone()));
+        require_send(download_file(&source, "", None, "", path, token.clone()));
     }
 }

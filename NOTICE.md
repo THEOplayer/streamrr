@@ -3,12 +3,18 @@ This software bundles the following third-party libraries:
  - anyhow version 1.0.102 (https://github.com/dtolnay/anyhow)  
    Author: David Tolnay <dtolnay@gmail.com>  
    License: MIT OR Apache-2.0
+ - base64 version 0.22.1 (https://github.com/marshallpierce/rust-base64)  
+   Author: Marshall Pierce <marshall@mpierce.org>  
+   License: MIT OR Apache-2.0
  - chrono version 0.4.44 (https://github.com/chronotope/chrono)  
    License: MIT OR Apache-2.0
  - clap version 4.6.0 (https://github.com/clap-rs/clap)  
    License: MIT OR Apache-2.0
  - futures version 0.3.32 (https://github.com/rust-lang/futures-rs)  
    License: MIT OR Apache-2.0
+ - har version 0.8.1 (https://github.com/mandrean/har-rs)  
+   Author: Sebastian Mandrean <sebastian.mandrean@gmail.com>  
+   License: MIT
  - indexmap version 2.13.0 (https://github.com/indexmap-rs/indexmap)  
    License: Apache-2.0 OR MIT
  - m3u8-rs version 6.0.0 (https://github.com/rutgersc/m3u8-rs)  
