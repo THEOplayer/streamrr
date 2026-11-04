@@ -116,6 +116,11 @@ enum CliCommand {
         recording_path: PathBuf,
         #[command(flatten)]
         args: RecordOrImportArgs,
+        /// The URL of the HLS playlist to import.
+        ///
+        /// If unset, the first HLS playlist in the HAR file is imported.
+        #[arg(long, value_name = "URL", value_parser = Url::parse)]
+        url: Option<Url>,
     },
 }
 
@@ -190,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
             har_path,
             recording_path,
             args,
+            url,
         } => {
             let variant_select = if let Some(bandwidth) = args.bandwidth {
                 VariantSelectOptions::Bandwidth(bandwidth)
@@ -203,7 +209,7 @@ async fn main() -> anyhow::Result<()> {
             let import_task = {
                 let token = token.clone();
                 spawn(async move {
-                    streamrr::import::import_har(har, &recording_path, options, token).await
+                    streamrr::import::import_har(har, url, &recording_path, options, token).await
                 })
             };
             match abort_on_ctrlc(import_task, token, RecordError::Cancelled).await {

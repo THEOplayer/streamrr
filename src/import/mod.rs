@@ -1,8 +1,9 @@
 pub(crate) mod har;
 
-use crate::record::{HarSource, RecordError, RecordOptions, Recorder};
+use crate::record::{HarSource, RecordError, RecordOptions, Recorder, Source};
 use crate::shared::StripBom;
 use anyhow::anyhow;
+use chrono::{DateTime, Utc};
 pub use har::Har;
 use har::{Entry, response_range};
 use std::io::Error;
@@ -50,27 +51,39 @@ fn is_hls_playlist(entry: &Entry) -> bool {
 
 pub async fn import_har(
     har: Har,
+    url: Option<Url>,
     dest: &Path,
     options: RecordOptions,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
-    // Find the first HLS playlist in the HAR
-    let mut entries: Vec<&Entry> = har.log.entries.iter().collect();
-    entries.sort_by_key(|entry| entry.started_date_time);
-    let first_playlist_request = entries
-        .into_iter()
-        .find(|entry| is_hls_playlist(entry))
-        .ok_or_else(|| Error::other("no playlist found"))?;
-    let url = first_playlist_request
-        .request
-        .url
-        .parse::<Url>()
-        .map_err(|e| RecordError::Parse(anyhow!("Invalid URL: {e}")))?;
-    let time = first_playlist_request.started_date_time;
-    println!("Importing {url}");
-
     // Create a source that reads from the HAR
-    let source = HarSource::new(har, time);
+    let (url, source) = match url {
+        Some(url) => {
+            // Start at the earliest usable entry for the requested URL.
+            let source = HarSource::new(har, DateTime::<Utc>::MIN_UTC);
+            if !source.is_available(&url, None).await {
+                return Err(RecordError::NotFound(url));
+            }
+            (url, source)
+        }
+        None => {
+            // Find the first HLS playlist in the HAR
+            let mut entries: Vec<&Entry> = har.log.entries.iter().collect();
+            entries.sort_by_key(|entry| entry.started_date_time);
+            let first_playlist_request = entries
+                .into_iter()
+                .find(|entry| is_hls_playlist(entry))
+                .ok_or_else(|| Error::other("no playlist found"))?;
+            let url = first_playlist_request
+                .request
+                .url
+                .parse::<Url>()
+                .map_err(|e| RecordError::Parse(anyhow!("Invalid URL: {e}")))?;
+            let time = first_playlist_request.started_date_time;
+            (url, HarSource::new(har, time))
+        }
+    };
+    println!("Importing {url}");
 
     let recorder = Recorder::new(source, dest, options).await?;
     recorder.run(&url, token).await
