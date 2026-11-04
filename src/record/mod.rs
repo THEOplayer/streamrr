@@ -5,6 +5,7 @@ use futures::stream::{StreamExt, TryStreamExt, iter};
 use m3u8_rs::*;
 use reqwest::Client;
 use reqwest::header::HeaderMap;
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::pin;
@@ -146,6 +147,29 @@ impl<S: Source + 'static> Recorder<S> {
         let rewriter = Rewriter::new(url, &self.dest, self.options.keep_names);
         rewriter.rewrite_master_playlist(&mut master_playlist)?;
 
+        // Drop variant streams and renditions that are not available from the source.
+        let mut variants = Vec::with_capacity(master_playlist.variants.len());
+        for variant in std::mem::take(&mut master_playlist.variants) {
+            if self
+                .is_original_uri_available(variant.other_attributes.as_ref())
+                .await
+            {
+                variants.push(variant);
+            }
+        }
+        master_playlist.variants = variants;
+        let mut alternatives = Vec::with_capacity(master_playlist.alternatives.len());
+        for media in std::mem::take(&mut master_playlist.alternatives) {
+            if media.uri.is_none()
+                || self
+                    .is_original_uri_available(media.other_attributes.as_ref())
+                    .await
+            {
+                alternatives.push(media);
+            }
+        }
+        master_playlist.alternatives = alternatives;
+
         // Select variant streams and renditions
         self.select_variants(&mut master_playlist);
         if master_playlist.variants.is_empty() {
@@ -214,6 +238,25 @@ impl<S: Source + 'static> Recorder<S> {
             res.map_err(|_| RecordError::Cancelled)??;
         }
         Ok(())
+    }
+
+    /// Whether the original URL stored in `other_attributes` is available
+    /// from the source. Entries without an original URL are kept.
+    async fn is_original_uri_available(
+        &self,
+        other_attributes: Option<&HashMap<String, QuotedOrUnquoted>>,
+    ) -> bool {
+        let Some(url) = other_attributes
+            .and_then(|attrs| attrs.get(ORIGINAL_URI))
+            .and_then(|uri| Url::parse(uri.as_str()).ok())
+        else {
+            return true;
+        };
+        let available = self.source.is_available(&url, None).await;
+        if !available {
+            println!("Skipping {url}: not available");
+        }
+        available
     }
 
     fn select_variants(&self, master_playlist: &mut MasterPlaylist) {
@@ -338,6 +381,7 @@ impl<S: Source + 'static> Recorder<S> {
                 remove_segments_from_end(&mut media_playlist, highest_media_sequence);
             }
             rewriter.rewrite_media_playlist(&mut media_playlist)?;
+            mark_gap_segments(&self.source, &mut media_playlist).await;
             write_media_playlist(&self.dest.join(&file_name), &media_playlist).await?;
             // Update recording
             self.recording
@@ -368,6 +412,83 @@ impl<S: Source + 'static> Recorder<S> {
             previous_playlist = Some(media_playlist);
         }
         Ok(())
+    }
+}
+
+/// Whether the resource at `uri` is available from the source,
+/// with results cached per (uri, byte range).
+async fn check_availability<S: Source>(
+    source: &S,
+    cache: &mut HashMap<(String, Option<ByteRange>), bool>,
+    uri: &str,
+    byte_range: Option<ByteRange>,
+) -> bool {
+    let key = (uri.to_string(), byte_range);
+    if let Some(&available) = cache.get(&key) {
+        return available;
+    }
+    let available = match Url::parse(uri) {
+        Ok(url) => source.is_available(&url, byte_range).await,
+        Err(_) => false,
+    };
+    cache.insert(key, available);
+    available
+}
+
+fn original_tag<'a>(segment: &'a MediaSegment, tag: &str) -> Option<&'a str> {
+    segment
+        .unknown_tags
+        .iter()
+        .find(|ext_tag| ext_tag.tag == tag)
+        .and_then(|ext_tag| ext_tag.rest.as_deref())
+}
+
+/// Mark segments that cannot be downloaded from the source with `#EXT-X-GAP`.
+async fn mark_gap_segments<S: Source>(source: &S, media_playlist: &mut MediaPlaylist) {
+    let mut availability = HashMap::new();
+    // The key and map of a segment also apply to subsequent segments.
+    let mut effective_key: Option<String> = None;
+    let mut effective_map: Option<(String, Option<ByteRange>)> = None;
+    for segment in &mut media_playlist.segments {
+        if segment.key.is_some() {
+            // A key tag without an original URL (e.g. METHOD=NONE or SAMPLE-AES)
+            // resets the effective key.
+            effective_key = original_tag(segment, ORIGINAL_KEY_URI).map(str::to_string);
+        }
+        if let Some(map) = &segment.map
+            && let Some(map_uri) = original_tag(segment, ORIGINAL_MAP_URI)
+        {
+            let map_byte_range = map
+                .other_attributes
+                .get(ORIGINAL_BYTE_RANGE)
+                .and_then(|byte_range| byte_range.as_str().parse().ok());
+            effective_map = Some((map_uri.to_string(), map_byte_range));
+        }
+        if segment
+            .unknown_tags
+            .iter()
+            .any(|ext_tag| ext_tag.tag == GAP)
+        {
+            continue;
+        }
+        let mut available = true;
+        if let Some(uri) = original_tag(segment, ORIGINAL_URI) {
+            let byte_range = original_tag(segment, ORIGINAL_BYTE_RANGE)
+                .and_then(|byte_range| byte_range.parse().ok());
+            available &= check_availability(source, &mut availability, uri, byte_range).await;
+        }
+        if let Some((uri, byte_range)) = &effective_map {
+            available &= check_availability(source, &mut availability, uri, *byte_range).await;
+        }
+        if let Some(uri) = &effective_key {
+            available &= check_availability(source, &mut availability, uri, None).await;
+        }
+        if !available {
+            segment.unknown_tags.push(ExtTag {
+                tag: GAP.to_string(),
+                rest: None,
+            });
+        }
     }
 }
 
@@ -467,6 +588,13 @@ async fn download_segment<S: Source>(
     dir: &Path,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
+    if media_segment
+        .unknown_tags
+        .iter()
+        .any(|ext_tag| ext_tag.tag == GAP)
+    {
+        return Ok(());
+    }
     let segment_url = media_segment
         .unknown_tags
         .iter()
@@ -511,6 +639,11 @@ async fn download_key<S: Source>(
         return Ok(());
     };
     let key_uri = original_key_tag.rest.as_ref().unwrap();
+    if let Ok(url) = Url::parse(key_uri.as_str())
+        && !source.is_available(&url, None).await
+    {
+        return Ok(());
+    }
     let key_file = key.uri.as_ref().unwrap();
     download_file(
         source,
@@ -546,6 +679,11 @@ async fn download_map<S: Source>(
         .map_err(|e| {
             RecordError::Parse(anyhow!("Invalid byte range in #X-ORIGINAL-BYTE-RANGE: {e}"))
         })?;
+    if let Ok(url) = Url::parse(map_uri.as_str())
+        && !source.is_available(&url, map_byte_range).await
+    {
+        return Ok(());
+    }
     let map_file = &map.uri;
     download_file(
         source,
