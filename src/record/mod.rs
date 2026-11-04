@@ -117,7 +117,7 @@ impl<S: Source + 'static> Recorder<S> {
         match initial_playlist {
             Playlist::MasterPlaylist(master_playlist) => {
                 // Master playlist
-                self.record_master_playlist(url, master_playlist, token)
+                self.record_master_playlist(url, master_playlist, playlist_time, token)
                     .await?;
             }
             Playlist::MediaPlaylist(media_playlist) => {
@@ -141,6 +141,7 @@ impl<S: Source + 'static> Recorder<S> {
         &self,
         url: &Url,
         mut master_playlist: MasterPlaylist,
+        playlist_time: DateTime<Utc>,
         token: CancellationToken,
     ) -> Result<(), RecordError> {
         // Rewrite master playlist
@@ -231,7 +232,7 @@ impl<S: Source + 'static> Recorder<S> {
         self.recording
             .lock()
             .await
-            .add_and_save(Utc::now(), master_name, master_name.to_string())
+            .add_and_save(playlist_time, master_name, master_name.to_string())
             .await?;
         // Wait for all tasks to complete
         while let Some(res) = join_set.join_next().await {
