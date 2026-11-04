@@ -68,6 +68,15 @@ The replayed stream is available at `http://localhost:8080/index.m3u8`.
 * If it's a recording of an HLS VOD stream, then the server will simply serve all files. (The tool doesn't do anything
   special in this case, you could also put the recorded files on any static web server.)
 
+`streamrr replay` can also serve an HTTP Archive (HAR) file directly, without importing it first:
+
+```bash
+streamrr replay capture.har
+```
+
+All captured variants and renditions are served, nothing is written to disk, and segments are decoded from the
+HAR only when requested.
+
 Run `streamrr replay --help` for the full instructions.
 
 ### Importing
