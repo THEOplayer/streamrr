@@ -1,7 +1,7 @@
 pub(crate) mod har;
 
 use crate::record::{HarSource, RecordError, RecordOptions, Recorder, Source};
-use crate::shared::StripBom;
+use crate::shared::{BOM, StripBom};
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 pub use har::Har;
@@ -41,12 +41,11 @@ fn is_hls_playlist(entry: &Entry) -> bool {
         return true;
     }
     // Sniff the content only if the MIME type doesn't match.
-    let Ok(bytes) = entry.response.content.as_bytes() else {
+    const SNIFF_LEN: usize = BOM.len() + b"#EXTM3U".len();
+    let Some(bytes) = entry.response.content.prefix(SNIFF_LEN) else {
         return false;
     };
-    String::from_utf8_lossy(&bytes)
-        .strip_bom()
-        .starts_with("#EXTM3U")
+    bytes.as_slice().strip_bom().starts_with(b"#EXTM3U")
 }
 
 pub async fn import_har(

@@ -92,6 +92,51 @@ impl Content {
             _ => Ok(text.into_bytes()),
         }
     }
+
+    /// The first `len` bytes of the decoded body (fewer if the body is
+    /// shorter), without decoding the complete body. Returns `None`
+    /// if the body is invalid.
+    pub(crate) fn prefix(&self, len: usize) -> Option<Vec<u8>> {
+        let Some(raw_text) = self.text.as_ref() else {
+            // Response has no content.
+            return Some(Vec::new());
+        };
+        // The raw value is a JSON string literal; strip the opening quote
+        // and work on bytes (the content may not be UTF-8).
+        let raw = raw_text.get().as_bytes().strip_prefix(b"\"")?;
+        let base64 = matches!(self.encoding.as_deref(), Some("base64"));
+        // The number of raw bytes needed to decode `len` bytes.
+        // `encoded_len` with padding rounds up to whole 4-char groups
+        // (e.g. 10 -> 16); without padding it would give 14, which
+        // `BASE64_STANDARD` rejects.
+        let needed = if base64 {
+            base64::encoded_len(len, true)?
+        } else {
+            len
+        };
+        let chunk = match raw
+            .iter()
+            .take(needed)
+            .position(|&byte| byte == b'\\' || byte == b'"')
+        {
+            // A JSON escape requires decoding the whole string.
+            Some(i) if raw[i] == b'\\' => {
+                let mut bytes = self.as_bytes().ok()?;
+                bytes.truncate(len);
+                return Some(bytes);
+            }
+            // The closing quote: the chunk is the complete string.
+            Some(i) => &raw[..i],
+            None => &raw[..needed.min(raw.len())],
+        };
+        let mut bytes = if base64 {
+            BASE64_STANDARD.decode(chunk).ok()?
+        } else {
+            chunk.to_vec()
+        };
+        bytes.truncate(len);
+        Some(bytes)
+    }
 }
 
 fn default_size() -> i64 {
@@ -192,6 +237,89 @@ mod tests {
 
     fn byte_range(offset: u64, length: u64) -> Option<ByteRange> {
         Some(ByteRange { length, offset })
+    }
+
+    fn parse_content(json: &str) -> Content {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn prefix_plain_text() {
+        // Longer than `len`.
+        let content = parse_content(r##"{"text": "#EXTM3U playlist body"}"##);
+        assert_eq!(
+            content.prefix(10).unwrap(),
+            &content.as_bytes().unwrap()[..10]
+        );
+        // Shorter than `len`.
+        let content = parse_content(r#"{"text": "abc"}"#);
+        assert_eq!(content.prefix(10).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn prefix_bom() {
+        // A raw UTF-8 BOM in the JSON text.
+        let content = parse_content("{\"text\": \"\u{feff}#EXTM3U body\"}");
+        assert_eq!(content.prefix(10).unwrap(), "\u{feff}#EXTM3U".as_bytes());
+        assert_eq!(
+            content.prefix(10).unwrap(),
+            &content.as_bytes().unwrap()[..10]
+        );
+        // An escaped BOM requires decoding the whole string.
+        let content = parse_content(r##"{"text": "\ufeff#EXTM3U body"}"##);
+        assert_eq!(content.prefix(10).unwrap(), "\u{feff}#EXTM3U".as_bytes());
+        assert_eq!(
+            content.prefix(10).unwrap(),
+            &content.as_bytes().unwrap()[..10]
+        );
+    }
+
+    #[test]
+    fn prefix_multibyte_utf8() {
+        // `len` lands in the middle of a multi-byte character.
+        let content = parse_content("{\"text\": \"äääää\"}");
+        assert_eq!(content.prefix(5).unwrap().len(), 5);
+        assert_eq!(
+            content.prefix(5).unwrap(),
+            &content.as_bytes().unwrap()[..5]
+        );
+    }
+
+    #[test]
+    fn prefix_base64() {
+        // Longer than the needed chunk (no padding in the chunk).
+        let content = parse_content(
+            r#"{"text": "MDEyMzQ1Njc4OUFCQ0RFRkdISUowMTIzNDU2Nzg5", "encoding": "base64"}"#,
+        );
+        assert_eq!(
+            content.prefix(10).unwrap(),
+            &content.as_bytes().unwrap()[..10]
+        );
+        // Shorter than the chunk, with `=` padding.
+        let content = parse_content(r#"{"text": "aGk=", "encoding": "base64"}"#);
+        assert_eq!(content.prefix(10).unwrap(), b"hi");
+    }
+
+    #[test]
+    fn prefix_base64_escaped() {
+        // An escaped `\/` requires decoding the whole string.
+        let content = parse_content(r#"{"text": "aGk\/aGk=", "encoding": "base64"}"#);
+        assert_eq!(
+            content.prefix(4).unwrap(),
+            &content.as_bytes().unwrap()[..4]
+        );
+    }
+
+    #[test]
+    fn prefix_invalid() {
+        let content = parse_content(r#"{"text": "!!!!", "encoding": "base64"}"#);
+        assert_eq!(content.prefix(10), None);
+    }
+
+    #[test]
+    fn prefix_missing() {
+        let content = parse_content(r#"{"size": 5}"#);
+        assert_eq!(content.prefix(10).unwrap(), Vec::<u8>::new());
     }
 
     #[test]

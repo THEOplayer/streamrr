@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-const BOM: &str = "\u{feff}";
+pub(crate) const BOM: &str = "\u{feff}";
 
 pub trait StripBom {
     /// Strip the byte-order mark (BOM) from a UTF-8 string.

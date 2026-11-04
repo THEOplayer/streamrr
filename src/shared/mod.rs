@@ -1,4 +1,5 @@
-pub use bom::*;
+pub(crate) use bom::BOM;
+pub use bom::StripBom;
 pub use byte_range::*;
 pub use ctrlc::*;
 pub use hexstring::*;
