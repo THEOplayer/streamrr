@@ -51,7 +51,9 @@ fn dump_dir(dir: &Path) -> String {
     let mut output = String::new();
     for file in files {
         let relative = file.strip_prefix(dir).unwrap();
-        output.push_str(&relative.to_string_lossy());
+        // Normalize path separators in the listing so snapshots match
+        // on Windows and Unix.
+        output.push_str(&relative.to_string_lossy().replace('\\', "/"));
         output.push('\n');
         let bytes = fs::read(&file).unwrap();
         output.push_str(&String::from_utf8_lossy(&bytes));
@@ -60,9 +62,7 @@ fn dump_dir(dir: &Path) -> String {
         }
         output.push('\n');
     }
-    // Normalize path separators inside file contents (e.g. recording.json,
-    // which escapes them as `\\` in JSON) so snapshots match on Windows and Unix.
-    output.replace("\\\\", "/").replace('\\', "/")
+    output
 }
 
 async fn import(har: &str, url: Option<Url>) -> (TempDir, Result<(), RecordError>) {

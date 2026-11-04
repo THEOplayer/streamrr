@@ -238,12 +238,40 @@ impl<'de> Deserialize<'de> for Recording {
                     let playlists = playlists
                         .into_iter()
                         .map(|SerializedPlaylist { time, path }| {
-                            (Utc.timestamp_millis_opt(time).unwrap(), path)
+                            (
+                                Utc.timestamp_millis_opt(time).unwrap(),
+                                // Recordings made on Windows used `\` separators.
+                                path.replace('\\', "/"),
+                            )
                         })
                         .collect();
-                    (name, playlists)
+                    // Recordings made on Windows used `\` separators.
+                    (name.replace('\\', "/"), playlists)
                 })
                 .collect(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Recordings made on Windows stored `\` separators; they must be
+    /// normalized to `/` when deserialized.
+    #[test]
+    fn deserialize_normalizes_separators() {
+        let json = r#"{"playlists": {"variant0\\index.m3u8": [{"time": 1767268800600, "path": "variant0\\index.m3u8"}]}}"#;
+        let recording: Recording = serde_json::from_str(json).unwrap();
+        let time = Utc.timestamp_millis_opt(1767268800600).unwrap();
+        assert_eq!(
+            recording.earliest_time_for("variant0/index.m3u8"),
+            Some((&time, "variant0/index.m3u8"))
+        );
+        let later = Utc.timestamp_millis_opt(1767268801000).unwrap();
+        assert_eq!(
+            recording.find_latest_before("variant0/index.m3u8", later),
+            Some((&time, "variant0/index.m3u8"))
+        );
     }
 }

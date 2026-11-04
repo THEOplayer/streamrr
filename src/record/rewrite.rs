@@ -18,6 +18,18 @@ pub const GAP: &str = "X-GAP";
 
 const DEFAULT_FILE_EXT: &str = "ts";
 
+/// Join a directory path and file name with `/` separators, so playlist
+/// paths in recordings are identical on every operating system.
+fn join_path(dir: &Path, file_name: &str) -> String {
+    let mut path = String::new();
+    for component in dir.components() {
+        path.push_str(component.as_os_str().to_str().unwrap());
+        path.push('/');
+    }
+    path.push_str(file_name);
+    path
+}
+
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum RewriteError {
@@ -58,11 +70,7 @@ impl<'a> Rewriter<'a> {
     }
 
     pub fn playlist_path(&self) -> String {
-        self.dest
-            .join(self.playlist_name())
-            .to_str()
-            .unwrap()
-            .to_string()
+        join_path(self.dest, self.playlist_name())
     }
 
     pub fn playlist_path_with_timestamp(&self, timestamp: &DateTime<Utc>) -> String {
@@ -72,11 +80,7 @@ impl<'a> Rewriter<'a> {
             file_name.strip_suffix(".m3u8").unwrap_or(file_name),
             timestamp.format("%Y%m%dT%H%M%S%.3f")
         );
-        self.dest
-            .join(file_name_with_timestamp)
-            .to_str()
-            .unwrap()
-            .to_string()
+        join_path(self.dest, &file_name_with_timestamp)
     }
 
     pub fn rewrite_master_playlist(
@@ -334,4 +338,31 @@ fn strip_segment(media_segment: &mut MediaSegment) {
     media_segment
         .unknown_tags
         .retain_mut(|ext_tag| !matches!(ext_tag.tag.as_str(), ORIGINAL_URI | ORIGINAL_BYTE_RANGE));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playlist_path_uses_forward_slashes() {
+        let url = Url::parse("https://example.com/high/index.m3u8").unwrap();
+        let timestamp = DateTime::parse_from_rfc3339("2026-01-01T12:00:00Z")
+            .unwrap()
+            .to_utc();
+
+        let rewriter = Rewriter::new(&url, Path::new("variant0"), false);
+        assert_eq!(rewriter.playlist_path(), "variant0/index.m3u8");
+        assert_eq!(
+            rewriter.playlist_path_with_timestamp(&timestamp),
+            "variant0/index-20260101T120000.000.m3u8"
+        );
+
+        let rewriter = Rewriter::new(&url, Path::new(""), false);
+        assert_eq!(rewriter.playlist_path(), "index.m3u8");
+        assert_eq!(
+            rewriter.playlist_path_with_timestamp(&timestamp),
+            "index-20260101T120000.000.m3u8"
+        );
+    }
 }
