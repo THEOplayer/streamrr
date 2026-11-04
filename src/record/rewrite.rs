@@ -70,7 +70,7 @@ impl<'a> Rewriter<'a> {
         let file_name_with_timestamp = format!(
             "{}-{}.m3u8",
             file_name.strip_suffix(".m3u8").unwrap_or(file_name),
-            timestamp.format("%Y%m%dT%H%M%S")
+            timestamp.format("%Y%m%dT%H%M%S%.3f")
         );
         self.dest
             .join(file_name_with_timestamp)
