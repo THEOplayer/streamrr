@@ -93,6 +93,41 @@ impl Content {
         }
     }
 
+    /// The length of the decoded body, computed without decoding it
+    /// unless the raw text contains JSON escapes. Returns `None` if
+    /// the body is invalid.
+    pub(crate) fn decoded_len(&self) -> Option<u64> {
+        let Some(raw_text) = self.text.as_ref() else {
+            // Response has no content.
+            return Some(0);
+        };
+        // The raw value is a JSON string literal; strip the quotes
+        // and work on bytes (the content may not be UTF-8).
+        let inner = raw_text
+            .get()
+            .as_bytes()
+            .strip_prefix(b"\"")?
+            .strip_suffix(b"\"")?;
+        // A JSON escape requires decoding the whole string.
+        if inner.contains(&b'\\') {
+            return self.as_bytes().ok().map(|bytes| bytes.len() as u64);
+        }
+        if matches!(self.encoding.as_deref(), Some("base64")) {
+            // Canonical base64 has a multiple-of-4 length and at most
+            // two `=` padding characters at the end.
+            if inner.len() % 4 != 0 {
+                return None;
+            }
+            let padding = inner.iter().rev().take_while(|&&b| b == b'=').count();
+            if padding > 2 {
+                return None;
+            }
+            Some((inner.len() / 4 * 3 - padding) as u64)
+        } else {
+            Some(inner.len() as u64)
+        }
+    }
+
     /// The first `len` bytes of the decoded body (fewer if the body is
     /// shorter), without decoding the complete body. Returns `None`
     /// if the body is invalid.
@@ -176,7 +211,7 @@ impl BodyRange {
 }
 
 /// The covered range of a usable response, without decoding the body
-/// (unless `content.size` is absent).
+/// (unless the raw text contains JSON escapes).
 pub(crate) fn response_range(entry: &Entry) -> Option<BodyRange> {
     let response = &entry.response;
     if !(200..=299).contains(&response.status) {
@@ -186,11 +221,7 @@ pub(crate) fn response_range(entry: &Entry) -> Option<BodyRange> {
     if response.content.is_missing() {
         return None;
     }
-    let len = if response.content.size >= 0 {
-        response.content.size as u64
-    } else {
-        response.content.as_bytes().ok()?.len() as u64
-    };
+    let len = response.content.decoded_len()?;
     if response.status == 206 {
         let content_range = response
             .headers
@@ -320,6 +351,42 @@ mod tests {
     fn prefix_missing() {
         let content = parse_content(r#"{"size": 5}"#);
         assert_eq!(content.prefix(10).unwrap(), Vec::<u8>::new());
+    }
+
+    fn assert_decoded_len(content: &Content) {
+        assert_eq!(
+            content.decoded_len(),
+            Some(content.as_bytes().unwrap().len() as u64)
+        );
+    }
+
+    #[test]
+    fn test_decoded_len() {
+        // Plain text without escapes.
+        assert_decoded_len(&parse_content(r#"{"text": "hello world"}"#));
+        // Plain text with escapes (fallback path).
+        assert_decoded_len(&parse_content(
+            r#"{"text": "line1\nline2 \"quoted\" é \ufeff"}"#,
+        ));
+        // Plain text with raw multi-byte UTF-8.
+        assert_decoded_len(&parse_content("{\"text\": \"äääää\"}"));
+        // Base64 with 0, 1 and 2 `=` padding.
+        assert_decoded_len(&parse_content(r#"{"text": "Zm9v", "encoding": "base64"}"#));
+        assert_decoded_len(&parse_content(r#"{"text": "Zm8=", "encoding": "base64"}"#));
+        assert_decoded_len(&parse_content(r#"{"text": "Zg==", "encoding": "base64"}"#));
+        // Base64 containing an escaped `\/` (fallback path).
+        assert_decoded_len(&parse_content(
+            r#"{"text": "aGk\/aGk=", "encoding": "base64"}"#,
+        ));
+        // No content.
+        let content = parse_content(r#"{"size": 5}"#);
+        assert_eq!(content.decoded_len(), Some(0));
+        // Invalid base64.
+        let content = parse_content(r#"{"text": "aGk", "encoding": "base64"}"#);
+        assert_eq!(content.decoded_len(), None);
+        // More than two `=` padding characters.
+        let content = parse_content(r#"{"text": "Y===", "encoding": "base64"}"#);
+        assert_eq!(content.decoded_len(), None);
     }
 
     #[test]
