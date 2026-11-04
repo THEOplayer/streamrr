@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added `import` command to import an HTTP Archive (HAR) file as a recording. ([#9](https://github.com/THEOplayer/streamrr/pull/9))
+
 ## v0.3.3 (2026-07-01)
 
 - Added `--keep-names` flag to `record` command to preserve the original file names of playlists and segments in the recording. (This may not be compatible with all streams.) ([#6](https://github.com/THEOplayer/streamrr/pull/6))

@@ -37,7 +37,7 @@ This will print the usage instructions.
 
 ## Usage
 
-The CLI has two main commands: `record` and `replay`.
+The CLI has three main commands: `record`, `replay` and `import`.
 
 ### Recording
 
@@ -69,6 +69,31 @@ The replayed stream is available at `http://localhost:8080/index.m3u8`.
   special in this case, you could also put the recorded files on any static web server.)
 
 Run `streamrr replay --help` for the full instructions.
+
+### Importing
+
+`streamrr import` will import an HTTP Archive (HAR) file as a recording.
+
+In your browser's developer tools, open the *Network* tab while playing the stream, then save all captured
+requests as a HAR file. In Chrome and Edge, right-click in the request list and choose *"Save all as HAR with content"*
+(or use the *Export HAR* button). In Firefox, right-click and choose *"Save All As HAR"*. Make sure response content
+is included.
+
+```bash
+streamrr import capture.har recordings/mystream/
+```
+
+This will import the first HLS playlist found in the HAR file. To import a different stream, pass its playlist URL
+with `--url`:
+
+```bash
+streamrr import --url https://example.com/mystream.m3u8 capture.har recordings/mystream/
+```
+
+Requests that were not captured (for example, segments that were already cached by the browser) are marked with
+`#EXT-X-GAP` in the imported playlists. Low-Latency HLS (LL-HLS) streams are not supported yet.
+
+Run `streamrr import --help` for the full instructions.
 
 ## Sharing recordings
 
