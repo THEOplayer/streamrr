@@ -176,6 +176,14 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
         self.select_renditions(&mut master_playlist);
         let master_playlist = master_playlist;
 
+        // Write updated master playlist
+        let master_name = "index.m3u8";
+        let mut buffer = vec![];
+        master_playlist.write_to(&mut buffer)?;
+        self.storage.write_playlist(master_name, buffer).await?;
+        self.save_recording(playlist_time, master_name, master_name.to_string())
+            .await?;
+
         // Start recording selected variant streams and renditions
         let mut join_set = JoinSet::new();
         for variant in &master_playlist.variants {
@@ -223,13 +231,6 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
                     .await
             });
         }
-        // Write updated master playlist
-        let master_name = "index.m3u8";
-        let mut buffer = vec![];
-        master_playlist.write_to(&mut buffer)?;
-        self.storage.write_playlist(master_name, buffer).await?;
-        self.save_recording(playlist_time, master_name, master_name.to_string())
-            .await?;
         // Wait for all tasks to complete
         while let Some(res) = join_set.join_next().await {
             res.map_err(|_| RecordError::Cancelled)??;

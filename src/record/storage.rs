@@ -1,6 +1,7 @@
 use crate::record::{RecordError, Source};
 use crate::shared::{ByteRange, Recording};
 use futures::TryStreamExt;
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::pin;
@@ -8,6 +9,7 @@ use std::sync::Arc;
 use tokio::fs;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
+use tokio_util::bytes::Bytes;
 use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -102,6 +104,72 @@ impl Storage for FsStorage {
         file.rewind().await?;
         file.write_all(recording_bytes).await?;
         file.set_len(recording_bytes.len() as u64).await?;
+        Ok(())
+    }
+}
+
+/// Stores a recording in memory, for replaying without writing to disk.
+#[derive(Clone, Default)]
+pub struct MemoryStorage {
+    inner: Arc<std::sync::Mutex<MemoryRecording>>,
+}
+
+/// The contents of a recording held in memory.
+#[derive(Default)]
+pub struct MemoryRecording {
+    pub recording: Recording,
+    /// Playlist contents by recording-relative path.
+    pub playlists: HashMap<String, Bytes>,
+    /// Resources by path, fetched from the source only when requested.
+    pub resources: HashMap<String, Resource>,
+}
+
+/// A resource to be fetched from a source on demand.
+#[derive(Clone, Debug)]
+pub struct Resource {
+    pub url: Url,
+    pub byte_range: Option<ByteRange>,
+}
+
+impl MemoryStorage {
+    /// Take the recorded contents out of the storage.
+    pub fn take(&self) -> MemoryRecording {
+        std::mem::take(&mut *self.inner.lock().unwrap())
+    }
+}
+
+impl Storage for MemoryStorage {
+    async fn write_playlist(&self, path: &str, contents: Vec<u8>) -> io::Result<()> {
+        self.inner
+            .lock()
+            .unwrap()
+            .playlists
+            .insert(path.to_string(), Bytes::from(contents));
+        Ok(())
+    }
+
+    async fn store_resource<S: Source>(
+        &self,
+        _source: &S,
+        url: &Url,
+        byte_range: Option<ByteRange>,
+        path: &str,
+        _token: CancellationToken,
+    ) -> Result<(), RecordError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .resources
+            .entry(path.to_string())
+            .or_insert(Resource {
+                url: url.clone(),
+                byte_range,
+            });
+        Ok(())
+    }
+
+    async fn save_recording(&self, recording: &Recording) -> io::Result<()> {
+        self.inner.lock().unwrap().recording = recording.clone();
         Ok(())
     }
 }

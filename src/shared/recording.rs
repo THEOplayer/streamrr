@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use m3u8_rs::{AlternativeMedia, VariantStream};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Recording {
     // Playlist file path is keyed by playlist name, then by UTC time
     playlists: IndexMap<String, BTreeMap<DateTime<Utc>, String>>,
