@@ -30,6 +30,7 @@ base64 = "0.22.1"
 
 [dev-dependencies]
 insta = "1.46.3"
+tempfile = "3.14.0"
 
 # Enable 'dist' even though publish = false
 [package.metadata.dist]

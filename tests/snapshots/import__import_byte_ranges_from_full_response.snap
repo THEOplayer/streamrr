@@ -1,0 +1,40 @@
+---
+source: tests/import.rs
+assertion_line: 106
+expression: dump_dir(dir.path())
+---
+index.m3u8
+#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXT-X-MAP:URI="init-a93d0244c63029398205960df07d3faa1e3f2ee0.mp4"
+#EXT-X-ORIGINAL-URI:https://example.com/vod/file.mp4
+#EXT-X-ORIGINAL-BYTE-RANGE:10@10
+#EXT-X-ORIGINAL-MAP-URI:https://example.com/vod/file.mp4
+#EXTINF:6,
+segment-0.mp4
+#EXT-X-ORIGINAL-URI:https://example.com/vod/file.mp4
+#EXT-X-ORIGINAL-BYTE-RANGE:10@20
+#EXTINF:6,
+segment-1.mp4
+#EXT-X-ENDLIST
+
+init-a93d0244c63029398205960df07d3faa1e3f2ee0.mp4
+0123456789
+
+recording.json
+{
+  "playlists": {
+    "index.m3u8": [
+      {
+        "time": 1767268800000,
+        "path": "index.m3u8"
+      }
+    ]
+  }
+}
+
+segment-0.mp4
+ABCDEFGHIJ
+
+segment-1.mp4
+0123456789
