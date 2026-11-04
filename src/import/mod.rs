@@ -1,6 +1,6 @@
 pub(crate) mod har;
 
-use crate::record::{HarSource, RecordError, RecordOptions, Recorder, Source};
+use crate::record::{FsStorage, HarSource, RecordError, RecordOptions, Recorder, Source};
 use crate::shared::{BOM, StripBom};
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
@@ -84,6 +84,7 @@ pub async fn import_har(
     };
     println!("Importing {url}");
 
-    let recorder = Recorder::new(source, dest, options).await?;
+    let storage = FsStorage::new(dest).await?;
+    let recorder = Recorder::new(source, storage, options);
     recorder.run(&url, token).await
 }

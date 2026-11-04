@@ -1,4 +1,4 @@
-use crate::shared::{ByteRange, hex, url_file_extension, url_file_name};
+use crate::shared::{ByteRange, hex, join_path, url_file_extension, url_file_name};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use m3u8_rs::*;
@@ -17,18 +17,6 @@ pub const ORIGINAL_RENDITION_REPORT: &str = "X-ORIGINAL-RENDITION-REPORT";
 pub const GAP: &str = "X-GAP";
 
 const DEFAULT_FILE_EXT: &str = "ts";
-
-/// Join a directory path and file name with `/` separators, so playlist
-/// paths in recordings are identical on every operating system.
-fn join_path(dir: &Path, file_name: &str) -> String {
-    let mut path = String::new();
-    for component in dir.components() {
-        path.push_str(component.as_os_str().to_str().unwrap());
-        path.push('/');
-    }
-    path.push_str(file_name);
-    path
-}
 
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
