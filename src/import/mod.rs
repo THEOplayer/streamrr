@@ -3,7 +3,7 @@ mod har;
 use crate::record::{HarSource, RecordError, RecordOptions, Recorder};
 use crate::shared::url_file_extension;
 use anyhow::anyhow;
-pub(crate) use har::Har;
+pub use har::Har;
 use std::io::Error;
 use std::path::Path;
 use tokio::fs;

@@ -1,107 +1,66 @@
 use base64::prelude::*;
 use chrono::{DateTime, Utc};
-pub use har::v1_3::*;
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use std::io::{Error, Result};
 
-#[derive(Clone, Debug, Deserialize, Default)]
-pub enum Version {
-    /// Version 1.2 of the HAR specification.
-    ///
-    /// Refer to the official
-    /// [specification](https://w3c.github.io/web-performance/specs/HAR/Overview.html)
-    /// for more information.
-    #[allow(non_camel_case_types)]
-    #[serde(rename = "1.2")]
-    #[default]
-    V1_2,
-
-    // Version 1.3 of the HAR specification.
-    //
-    // Refer to the draft
-    // [specification](https://github.com/ahmadnassri/har-spec/blob/master/versions/1.3.md)
-    // for more information.
-    #[allow(non_camel_case_types)]
-    #[serde(rename = "1.3")]
-    V1_3,
-}
-
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Har {
-    pub log: Log,
+    pub(crate) log: Log,
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct Log {
-    pub version: Version,
-    pub creator: Creator,
-    pub browser: Option<Creator>,
-    pub pages: Option<Vec<Pages>>,
-    pub entries: Vec<Entries>,
-    pub comment: Option<String>,
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Log {
+    #[serde(default)]
+    pub entries: Vec<Entry>,
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct Pages {
-    #[serde(rename = "startedDateTime")]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Entry {
     pub started_date_time: DateTime<Utc>,
-    pub id: String,
-    pub title: String,
-    #[serde(rename = "pageTimings")]
-    pub page_timings: PageTimings,
-    pub comment: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct Entries {
-    pub pageref: Option<String>,
-    #[serde(rename = "startedDateTime")]
-    pub started_date_time: DateTime<Utc>,
-    pub time: f64,
     pub request: Request,
     pub response: Response,
-    pub cache: Cache,
-    pub timings: Timings,
-    #[serde(rename = "serverIPAddress")]
-    pub server_ip_address: Option<String>,
-    pub connection: Option<String>,
-    pub comment: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct Response {
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Request {
+    #[serde(default)]
+    pub method: String,
+    pub url: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Response {
+    #[serde(default)]
     pub status: i64,
-    #[serde(rename = "statusText")]
-    pub status_text: String,
-    #[serde(rename = "httpVersion")]
-    pub http_version: String,
-    pub cookies: Vec<Cookies>,
-    pub headers: Vec<Headers>,
+    #[serde(default)]
+    pub headers: Vec<Header>,
+    #[serde(default)]
     pub content: Content,
-    #[serde(rename = "redirectURL")]
-    pub redirect_url: Option<String>,
-    #[serde(rename = "headersSize", default = "default_isize")]
-    pub headers_size: i64,
-    #[serde(rename = "bodySize", default = "default_isize")]
-    pub body_size: i64,
-    pub comment: Option<String>,
-    #[serde(rename = "headersCompression")]
-    pub headers_compression: Option<i64>,
+    #[serde(default, rename = "redirectURL")]
+    pub redirect_url: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct Content {
-    #[serde(default = "default_isize")]
+#[derive(Debug, Deserialize)]
+pub(crate) struct Header {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Content {
+    #[serde(default = "default_size")]
     pub size: i64,
-    pub compression: Option<i64>,
-    #[serde(rename = "mimeType")]
     pub mime_type: Option<String>,
-    // CHANGED: Parse as raw value, to avoid keeping a ton of strings in memory.
-    // pub text: Option<String>,
+    // Parse as raw value, to avoid keeping a ton of strings in memory.
     text: Option<Box<RawValue>>,
     pub encoding: Option<String>,
-    pub comment: Option<String>,
 }
 
 impl Content {
@@ -128,6 +87,6 @@ impl Content {
     }
 }
 
-fn default_isize() -> i64 {
+fn default_size() -> i64 {
     -1
 }

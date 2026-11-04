@@ -3,18 +3,22 @@ use crate::record::Source;
 use crate::shared::{ByteRange, Timed};
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
+use std::sync::Arc;
 use tokio_util::bytes::Bytes;
 use url::Url;
 
 #[derive(Clone)]
 pub struct HarSource {
-    har: Har,
+    har: Arc<Har>,
     time: DateTime<Utc>,
 }
 
 impl HarSource {
     pub fn new(har: Har, time: DateTime<Utc>) -> Self {
-        Self { har, time }
+        Self {
+            har: Arc::new(har),
+            time,
+        }
     }
 }
 

@@ -12,9 +12,6 @@ This software bundles the following third-party libraries:
    License: MIT OR Apache-2.0
  - futures version 0.3.32 (https://github.com/rust-lang/futures-rs)  
    License: MIT OR Apache-2.0
- - har version 0.8.1 (https://github.com/mandrean/har-rs)  
-   Author: Sebastian Mandrean <sebastian.mandrean@gmail.com>  
-   License: MIT
  - indexmap version 2.13.0 (https://github.com/indexmap-rs/indexmap)  
    License: Apache-2.0 OR MIT
  - m3u8-rs version 6.0.0 (https://github.com/rutgersc/m3u8-rs)  
