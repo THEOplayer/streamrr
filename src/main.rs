@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::net::IpAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
@@ -96,7 +96,8 @@ enum CliCommand {
     },
     /// Replay a HLS VOD or live stream.
     Replay {
-        /// The directory path of the recording of an HLS stream created by record.
+        /// The directory path of a recording created by record or import,
+        /// or an HTTP Archive (HAR) file.
         #[arg(value_name = "PATH")]
         recording_path: PathBuf,
         /// The address on which to run the server.
@@ -179,7 +180,13 @@ async fn main() -> anyhow::Result<()> {
             let replay_task = {
                 let token = token.clone();
                 spawn(async move {
-                    streamrr::replay::replay(&recording_path, address, port, token).await
+                    // A file is a HAR archive; a directory is a recording.
+                    if recording_path.is_file() {
+                        let har = load_har(&recording_path).map_err(ReplayError::InvalidHar)?;
+                        streamrr::replay::replay_har(har, address, port, token).await
+                    } else {
+                        streamrr::replay::replay(&recording_path, address, port, token).await
+                    }
                 })
             };
             match abort_on_ctrlc(replay_task, token, ReplayError::Cancelled).await {
@@ -204,8 +211,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let options = args.into_record_options(variant_select, HeaderMap::new());
             let token = CancellationToken::new();
-            let har_file = File::open(har_path)?;
-            let har = serde_json::from_reader(BufReader::new(har_file))?;
+            let har = load_har(&har_path)?;
             let import_task = {
                 let token = token.clone();
                 spawn(async move {
@@ -223,6 +229,12 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Load an HTTP Archive (HAR) file.
+fn load_har(path: &Path) -> anyhow::Result<streamrr::import::Har> {
+    let file = File::open(path)?;
+    Ok(serde_json::from_reader(BufReader::new(file))?)
 }
 
 fn parse_header(s: &str) -> Result<(HeaderName, HeaderValue), String> {

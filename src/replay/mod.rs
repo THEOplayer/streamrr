@@ -18,8 +18,13 @@ use warp::path::{FullPath, Peek, Tail};
 use warp::reject::{Reject, custom};
 use warp::{Filter, Rejection, Reply, reject, reply};
 
-use crate::record::{HarSource, MemoryRecording, Source, strip_media_playlist};
-use crate::shared::{Recording, StripBom};
+use crate::import::{Har, import_har_into};
+use crate::record::{
+    HarSource, MemoryRecording, MemoryStorage, RecordError, RecordOptions, Source,
+    strip_media_playlist,
+};
+use crate::shared::{MediaSelect, Recording, StripBom, VariantSelect, VariantSelectOptions};
+use reqwest::header::HeaderMap;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 struct PlaylistQueryParams {
@@ -41,6 +46,10 @@ pub enum ReplayError {
     MissingPlaylist(String),
     #[error("Invalid playlist: {0}")]
     InvalidPlaylist(#[from] anyhow::Error),
+    #[error("import error: {0}")]
+    Import(RecordError),
+    #[error("Invalid HAR file: {0}")]
+    InvalidHar(anyhow::Error),
     #[error("Cancelled")]
     Cancelled,
 }
@@ -95,6 +104,37 @@ pub async fn replay(
         dir: recording_path,
         recording,
     });
+    serve(store, address, port, token).await
+}
+
+/// Replay a HAR file directly from memory, without importing it to disk.
+/// All captured variants and renditions are served, and segments are
+/// decoded from the HAR only when requested.
+pub async fn replay_har(
+    har: Har,
+    address: IpAddr,
+    port: u16,
+    token: CancellationToken,
+) -> Result<(), ReplayError> {
+    let storage = MemoryStorage::default();
+    let options = RecordOptions {
+        variant_select: VariantSelectOptions::Named(VariantSelect::All),
+        audio: MediaSelect::All,
+        video: MediaSelect::All,
+        subtitle: MediaSelect::All,
+        start: None,
+        end: None,
+        headers: HeaderMap::new(),
+        keep_names: false,
+    };
+    let source = import_har_into(har, None, storage.clone(), options, token.clone())
+        .await
+        .map_err(|e| match e {
+            RecordError::Cancelled => ReplayError::Cancelled,
+            e => ReplayError::Import(e),
+        })?;
+    let recording = storage.take();
+    let store = Arc::new(Store::Memory { recording, source });
     serve(store, address, port, token).await
 }
 
@@ -316,4 +356,178 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
 
     let html = warp::reply::html(message);
     Ok(warp::reply::with_status(html, code))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::import::import_har_into;
+    use crate::record::{FsStorage, MemoryStorage};
+
+    fn all_options() -> RecordOptions {
+        RecordOptions {
+            variant_select: VariantSelectOptions::Named(VariantSelect::All),
+            audio: MediaSelect::All,
+            video: MediaSelect::All,
+            subtitle: MediaSelect::All,
+            start: None,
+            end: None,
+            headers: HeaderMap::new(),
+            keep_names: false,
+        }
+    }
+
+    fn load_har_fixture(name: &str) -> Har {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/har")
+            .join(name);
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    async fn memory_routes(har: Har) -> warp::filters::BoxedFilter<(reply::Response,)> {
+        let storage = MemoryStorage::default();
+        let source = import_har_into(
+            har,
+            None,
+            storage.clone(),
+            all_options(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let recording = storage.take();
+        let recording_start = *recording.recording.earliest_time().unwrap();
+        routes(
+            Arc::new(Store::Memory { recording, source }),
+            recording_start,
+        )
+    }
+
+    #[tokio::test]
+    async fn replay_memory_store() {
+        let routes = memory_routes(load_har_fixture("vod.har")).await;
+        // A playlist request without `start` redirects to a start time.
+        let response = warp::test::request()
+            .path("/index.m3u8")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert!(
+            response.headers()["location"]
+                .to_str()
+                .unwrap()
+                .contains("?start=")
+        );
+        // The master playlist is served with `?start=` appended to URIs.
+        let response = warp::test::request()
+            .path("/index.m3u8?start=1")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+        assert!(body.contains("?start=1"));
+        // The variant playlist is served with original-info tags stripped.
+        let response = warp::test::request()
+            .path("/variant1/index.m3u8?start=1")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+        assert!(body.contains("#EXT-X-TARGETDURATION:6"));
+        assert!(!body.contains("ORIGINAL"));
+        // A segment is decoded from the HAR on demand.
+        let response = warp::test::request()
+            .path("/variant1/segment-0.ts")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "video/vnd.dlna.mpeg-tts"
+        );
+        assert_eq!(response.body().as_ref(), b"seg-1");
+        // An unknown path is not found.
+        let response = warp::test::request()
+            .path("/variant1/nope.ts")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn replay_memory_store_byte_ranges() {
+        let routes = memory_routes(load_har_fixture("byteranges.har")).await;
+        // The init segment is sliced from a captured byte-range response.
+        let response = warp::test::request()
+            .path("/init-a93d0244c63029398205960df07d3faa1e3f2ee0.mp4")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "video/mp4");
+        assert_eq!(response.body().as_ref(), b"0123456789");
+        // Segment data sliced from the captured range.
+        let response = warp::test::request()
+            .path("/segment-0.mp4")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.body().as_ref(), b"ABCDEFGHIJ");
+        // A #EXT-X-GAP segment was never captured: not found.
+        let response = warp::test::request()
+            .path("/segment-1.mp4")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Serving from a directory behaves the same as serving from memory.
+    #[tokio::test]
+    async fn replay_directory_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = FsStorage::new(dir.path()).await.unwrap();
+        import_har_into(
+            load_har_fixture("vod.har"),
+            None,
+            storage,
+            all_options(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let raw_recording = fs::read_to_string(dir.path().join("recording.json"))
+            .await
+            .unwrap();
+        let recording: Recording = serde_json::from_str(&raw_recording).unwrap();
+        let recording_start = *recording.earliest_time().unwrap();
+        let routes = routes(
+            Arc::new(Store::Directory {
+                dir: dir.path().to_path_buf(),
+                recording,
+            }),
+            recording_start,
+        );
+        let response = warp::test::request()
+            .path("/index.m3u8")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        let response = warp::test::request()
+            .path("/variant1/index.m3u8?start=1")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+        assert!(!body.contains("ORIGINAL"));
+        let response = warp::test::request()
+            .path("/variant1/segment-0.ts")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.body().as_ref(), b"seg-1");
+        let response = warp::test::request()
+            .path("/variant1/nope.ts")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }
