@@ -1,4 +1,4 @@
-mod har;
+pub(crate) mod har;
 
 use crate::record::{HarSource, RecordError, RecordOptions, Recorder};
 use crate::shared::url_file_extension;
@@ -6,7 +6,6 @@ use anyhow::anyhow;
 pub use har::Har;
 use std::io::Error;
 use std::path::Path;
-use tokio::fs;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -16,8 +15,6 @@ pub async fn import_har(
     options: RecordOptions,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
-    fs::create_dir_all(dest).await?;
-
     // Find the first .m3u8 request
     let first_playlist_request = har
         .log
