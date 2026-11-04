@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::bytes::Bytes;
 use url::Url;
 
@@ -119,6 +120,9 @@ impl Found<'_> {
 pub struct HarSource {
     har: Arc<SharedHar>,
     time: DateTime<Utc>,
+    /// Whether `time` itself is included in playlist lookups.
+    /// Set when refreshing past a playlist's capture time.
+    inclusive: bool,
 }
 
 impl HarSource {
@@ -143,6 +147,7 @@ impl HarSource {
         Self {
             har: Arc::new(SharedHar { har, index }),
             time: start_time,
+            inclusive: true,
         }
     }
 }
@@ -150,8 +155,30 @@ impl HarSource {
 impl Source for HarSource {
     type Error = anyhow::Error;
 
-    async fn advance_to_time(&mut self, time: DateTime<Utc>) {
-        self.time = time;
+    async fn wait_for_refresh(&mut self, playlist_time: DateTime<Utc>, _target_duration: Duration) {
+        // Every captured snapshot is replayed in order, so the target
+        // duration is ignored. The next playlist must be captured
+        // strictly after the current one.
+        self.time = playlist_time;
+        self.inclusive = false;
+    }
+
+    async fn request_playlist(&self, url: &Url) -> Result<Option<Timed<String>>, Self::Error> {
+        let Some(found) = self
+            .har
+            .lookup(url, None, Some(self.time), self.inclusive, 0)
+        else {
+            return Ok(None);
+        };
+        let bytes = found.decode(url)?;
+        Ok(Some(Timed {
+            value: String::from_utf8_lossy(&bytes).to_string(),
+            time: found.time,
+        }))
+    }
+
+    async fn is_available(&self, url: &Url, byte_range: Option<ByteRange>) -> bool {
+        self.har.lookup(url, byte_range, None, true, 0).is_some()
     }
 
     async fn request(
@@ -161,7 +188,7 @@ impl Source for HarSource {
     ) -> Result<Timed<Bytes>, Self::Error> {
         let found = self
             .har
-            .lookup(url, byte_range, Some(self.time), true, 0)
+            .lookup(url, byte_range, None, true, 0)
             .ok_or_else(|| anyhow!("Not found: {url}"))?;
         let bytes = found.decode(url)?;
         Ok(Timed {

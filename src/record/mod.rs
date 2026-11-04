@@ -50,6 +50,8 @@ pub enum RecordError {
     Rewrite(#[from] RewriteError),
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
+    #[error("not found: {0}")]
+    NotFound(Url),
     #[error("cancelled")]
     Cancelled,
 }
@@ -101,6 +103,7 @@ impl<S: Source + 'static> Recorder<S> {
             .run_until_cancelled(download_playlist(&self.source, url))
             .await
             .ok_or(RecordError::Cancelled)??
+            .ok_or_else(|| RecordError::NotFound(url.clone()))?
             .and_then(|raw_playlist| {
                 let raw_playlist = raw_playlist.strip_bom();
                 parse_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
@@ -293,19 +296,23 @@ impl<S: Source + 'static> Recorder<S> {
             } = if let Some(playlist) = initial_playlist.take() {
                 playlist
             } else {
-                token
+                let Some(raw_playlist) = token
                     .run_until_cancelled(download_playlist(&self.source, url))
                     .await
                     .ok_or(RecordError::Cancelled)??
-                    .and_then(|raw_playlist| {
-                        let raw_playlist = raw_playlist.strip_bom();
-                        parse_media_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
-                            RecordError::Parse(anyhow!(
-                                "Error while parsing media playlist: {}",
-                                e.map_input(|i| String::from_utf8_lossy(i))
-                            ))
-                        })
-                    })?
+                else {
+                    // The source has no more versions of this playlist.
+                    break;
+                };
+                raw_playlist.and_then(|raw_playlist| {
+                    let raw_playlist = raw_playlist.strip_bom();
+                    parse_media_playlist_res(raw_playlist.as_bytes()).map_err(|e| {
+                        RecordError::Parse(anyhow!(
+                            "Error while parsing media playlist: {}",
+                            e.map_input(|i| String::from_utf8_lossy(i))
+                        ))
+                    })
+                })?
             };
             let file_name = if previous_playlist.is_none() && media_playlist.end_list {
                 // Playlist is a VOD. No need for a timestamp, since we won't ever refresh it.
@@ -351,10 +358,11 @@ impl<S: Source + 'static> Recorder<S> {
             if media_playlist.end_list {
                 break;
             }
-            let next_refresh_time =
-                playlist_time + Duration::from_secs(media_playlist.target_duration);
             token
-                .run_until_cancelled(self.source.advance_to_time(next_refresh_time))
+                .run_until_cancelled(self.source.wait_for_refresh(
+                    playlist_time,
+                    Duration::from_secs(media_playlist.target_duration),
+                ))
                 .await
                 .ok_or(RecordError::Cancelled)?;
             previous_playlist = Some(media_playlist);
@@ -363,9 +371,12 @@ impl<S: Source + 'static> Recorder<S> {
     }
 }
 
-async fn download_playlist<S: Source>(source: &S, url: &Url) -> Result<Timed<String>, RecordError> {
+async fn download_playlist<S: Source>(
+    source: &S,
+    url: &Url,
+) -> Result<Option<Timed<String>>, RecordError> {
     source
-        .request_string(url, None)
+        .request_playlist(url)
         .await
         .map_err(|e| RecordError::Io(io::Error::other(e)))
 }

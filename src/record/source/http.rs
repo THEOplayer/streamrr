@@ -3,6 +3,7 @@ use crate::shared::{ByteRange, Timed};
 use chrono::{DateTime, Utc};
 use futures::{Stream, TryStreamExt, future::ready, stream::once};
 use reqwest::{Client, RequestBuilder, Response};
+use std::time::Duration;
 use tokio::time::sleep;
 use tokio_util::bytes::Bytes;
 use url::Url;
@@ -40,9 +41,20 @@ impl HttpSource {
 impl Source for HttpSource {
     type Error = reqwest::Error;
 
-    async fn advance_to_time(&mut self, time: DateTime<Utc>) {
-        let duration = (time - Utc::now()).to_std().unwrap_or_default();
+    async fn wait_for_refresh(&mut self, playlist_time: DateTime<Utc>, target_duration: Duration) {
+        let next_refresh_time = playlist_time + target_duration;
+        let duration = (next_refresh_time - Utc::now())
+            .to_std()
+            .unwrap_or_default();
         sleep(duration).await
+    }
+
+    async fn request_playlist(&self, url: &Url) -> Result<Option<Timed<String>>, Self::Error> {
+        let request = self.build_request(url, None);
+        let response = request.send().await?;
+        let time = Utc::now();
+        let text = response.text().await?;
+        Ok(Some(Timed { value: text, time }))
     }
 
     async fn request(
@@ -55,18 +67,6 @@ impl Source for HttpSource {
         let time = Utc::now();
         let bytes = response.bytes().await?;
         Ok(Timed { value: bytes, time })
-    }
-
-    async fn request_string(
-        &self,
-        url: &Url,
-        byte_range: Option<ByteRange>,
-    ) -> Result<Timed<String>, Self::Error> {
-        let request = self.build_request(url, byte_range);
-        let response = request.send().await?;
-        let time = Utc::now();
-        let text = response.text().await?;
-        Ok(Timed { value: text, time })
     }
 
     async fn request_stream(

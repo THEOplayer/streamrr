@@ -1,6 +1,7 @@
 use crate::shared::ByteRange;
 use chrono::{DateTime, Utc};
 use futures::{Stream, future::ready, stream::once};
+use std::time::Duration;
 use tokio_util::bytes::Bytes;
 use url::Url;
 
@@ -14,32 +15,36 @@ pub use http::HttpSource;
 pub trait Source: Clone + Send + Sync {
     type Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send;
 
-    /// Advance the current time for subsequent requests.
+    /// Wait until a playlist that was loaded at `playlist_time` should be refreshed.
+    fn wait_for_refresh(
+        &mut self,
+        playlist_time: DateTime<Utc>,
+        target_duration: Duration,
+    ) -> impl Future<Output = ()> + Send;
+
+    /// Request the playlist at the given URL as it was at the current time.
+    /// Returns `None` if the source has no (more) versions of this playlist.
+    fn request_playlist(
+        &self,
+        url: &Url,
+    ) -> impl Future<Output = Result<Option<Timed<String>>, Self::Error>> + Send;
+
+    /// Whether the resource at the given URL and byte range is available.
     #[allow(unused_variables)]
-    fn advance_to_time(&mut self, time: DateTime<Utc>) -> impl Future<Output = ()> + Send {
-        ready(())
+    fn is_available(
+        &self,
+        url: &Url,
+        byte_range: Option<ByteRange>,
+    ) -> impl Future<Output = bool> + Send {
+        ready(true)
     }
 
-    /// Request the resource at the given URL
-    /// as it was at the time set by `advance_to_time`.
+    /// Request the resource at the given URL.
     fn request(
         &self,
         url: &Url,
         byte_range: Option<ByteRange>,
     ) -> impl Future<Output = Result<Timed<Bytes>, Self::Error>> + Send;
-
-    /// Request the resource at the given URL as a string,
-    /// as it was at the time set by `advance_to_time`.
-    fn request_string(
-        &self,
-        url: &Url,
-        byte_range: Option<ByteRange>,
-    ) -> impl Future<Output = Result<Timed<String>, Self::Error>> + Send {
-        async move {
-            let bytes = self.request(url, byte_range).await?;
-            Ok(bytes.map(|bytes| String::from_utf8_lossy(&bytes).to_string()))
-        }
-    }
 
     /// Request the resource at the given URL as a stream.
     fn request_stream(
