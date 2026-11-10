@@ -13,6 +13,7 @@ use tokio::fs;
 use tokio::io;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
+use url::Url;
 use warp::http::{Response, StatusCode, Uri, header::CONTENT_TYPE};
 use warp::path::{FullPath, Peek, Tail};
 use warp::reject::{Reject, custom};
@@ -127,15 +128,31 @@ pub async fn replay_har(
         headers: HeaderMap::new(),
         keep_names: false,
     };
-    let source = import_har_into(har, None, storage.clone(), options, token.clone())
-        .await
-        .map_err(|e| match e {
-            RecordError::Cancelled => ReplayError::Cancelled,
-            e => ReplayError::Import(e),
-        })?;
+    let source = import_har_into(
+        har,
+        None,
+        storage.clone(),
+        options,
+        Arc::new(ServingPlaylist),
+        token.clone(),
+    )
+    .await
+    .map_err(|e| match e {
+        RecordError::Cancelled => ReplayError::Cancelled,
+        e => ReplayError::Import(e),
+    })?;
     let recording = storage.take();
     let store = Arc::new(Store::Memory { recording, source });
     serve(store, address, port, token).await
+}
+
+/// Prints which playlist from the HAR is being served.
+struct ServingPlaylist;
+
+impl crate::record::RecordProgress for ServingPlaylist {
+    fn started(&self, url: &Url) {
+        println!("Importing {url}");
+    }
 }
 
 async fn serve(
@@ -363,7 +380,7 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
 mod tests {
     use super::*;
     use crate::import::import_har_into;
-    use crate::record::{FsStorage, MemoryStorage};
+    use crate::record::{FsStorage, MemoryStorage, NoProgress};
 
     fn all_options() -> RecordOptions {
         RecordOptions {
@@ -392,6 +409,7 @@ mod tests {
             None,
             storage.clone(),
             all_options(),
+            Arc::new(NoProgress),
             CancellationToken::new(),
         )
         .await
@@ -491,6 +509,7 @@ mod tests {
             None,
             storage,
             all_options(),
+            Arc::new(NoProgress),
             CancellationToken::new(),
         )
         .await

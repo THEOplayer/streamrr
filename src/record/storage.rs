@@ -1,4 +1,4 @@
-use crate::record::{RecordError, Source, WithSize};
+use crate::record::{DownloadProgress, RecordError, Source, WithSize};
 use crate::shared::{ByteRange, Recording};
 use futures::TryStreamExt;
 use std::collections::HashMap;
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::sync::Arc;
 use tokio::fs;
-use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio_util::bytes::Bytes;
 use tokio_util::io::StreamReader;
@@ -30,6 +30,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
         source: &S,
         url: &Url,
         byte_range: Option<ByteRange>,
+        download: &dyn DownloadProgress,
         path: &str,
         token: CancellationToken,
     ) -> impl Future<Output = Result<(), RecordError>> + Send;
@@ -69,6 +70,7 @@ impl Storage for FsStorage {
         source: &S,
         url: &Url,
         byte_range: Option<ByteRange>,
+        download: &dyn DownloadProgress,
         path: &str,
         token: CancellationToken,
     ) -> Result<(), RecordError> {
@@ -83,15 +85,30 @@ impl Storage for FsStorage {
             .await
         {
             Ok(file) => file,
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                download.finish();
+                return Ok(());
+            }
             Err(err) => return Err(err.into()),
         };
-        let WithSize { contents, .. } = token
+        let WithSize { size, contents } = token
             .run_until_cancelled(source.request_stream(url, byte_range))
             .await
             .ok_or(RecordError::Cancelled)?;
+        if let Some(size) = size {
+            download.set_size(size);
+        }
         let mut response_stream = pin!(StreamReader::new(contents.map_err(io::Error::other)));
-        tokio::io::copy_buf(&mut response_stream, &mut file).await?;
+        let mut buffer = vec![0; 16 * 1024];
+        loop {
+            let read = response_stream.read(&mut buffer).await?;
+            if read == 0 {
+                break;
+            }
+            file.write_all(&buffer[..read]).await?;
+            download.inc(read as u64);
+        }
+        download.finish();
         Ok(())
     }
 
@@ -159,9 +176,11 @@ impl Storage for MemoryStorage {
         _source: &S,
         url: &Url,
         byte_range: Option<ByteRange>,
+        download: &dyn DownloadProgress,
         path: &str,
         _token: CancellationToken,
     ) -> Result<(), RecordError> {
+        download.finish();
         self.inner
             .lock()
             .unwrap()

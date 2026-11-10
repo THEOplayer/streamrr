@@ -25,11 +25,6 @@ impl HttpSource {
             format!("bytes={start}-{end}")
         });
 
-        println!(
-            "Download: {url} {}",
-            range_header.as_ref().unwrap_or(&String::new())
-        );
-
         let mut request = self.client.get(url.clone());
         if let Some(range) = range_header {
             request = request.header(reqwest::header::RANGE, range);

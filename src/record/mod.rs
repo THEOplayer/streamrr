@@ -5,7 +5,7 @@ use futures::stream::{StreamExt, TryStreamExt, iter};
 use m3u8_rs::*;
 use reqwest::Client;
 use reqwest::header::HeaderMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
@@ -18,10 +18,12 @@ use url::Url;
 use crate::shared::{
     ByteRange, MediaSelect, Recording, StripBom, Timed, VariantSelectOptions, join_path,
 };
+pub use progress::*;
 pub use rewrite::*;
 pub use source::*;
 pub use storage::*;
 
+mod progress;
 mod rewrite;
 mod source;
 mod storage;
@@ -61,6 +63,7 @@ pub async fn record(
     url: &Url,
     dest: &Path,
     options: RecordOptions,
+    progress: Progress,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
     let client = Client::builder()
@@ -70,7 +73,7 @@ pub async fn record(
         .map_err(|_| RecordError::Config("Error while building HTTP client"))?;
     let source = HttpSource::new(client);
     let storage = FsStorage::new(dest);
-    let recorder = Recorder::new(source, storage, options);
+    let recorder = Recorder::new(source, storage, options).with_progress(progress);
     recorder.run(url, token).await
 }
 
@@ -80,6 +83,7 @@ pub struct Recorder<S: Source, T: Storage> {
     storage: T,
     recording: Arc<Mutex<Recording>>,
     options: RecordOptions,
+    progress: Progress,
 }
 
 impl<S: Source + 'static, T: Storage> Recorder<S, T> {
@@ -89,10 +93,18 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
             storage,
             recording: Arc::new(Mutex::new(Recording::new())),
             options,
+            progress: Arc::new(NoProgress),
         }
     }
 
+    /// Report progress to the given handler.
+    pub fn with_progress(mut self, progress: Progress) -> Self {
+        self.progress = progress;
+        self
+    }
+
     pub async fn run(mut self, url: &Url, token: CancellationToken) -> Result<(), RecordError> {
+        self.progress.started(url);
         // Download initial playlist
         let Timed {
             value: initial_playlist,
@@ -119,9 +131,14 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
             }
             Playlist::MediaPlaylist(media_playlist) => {
                 // Media playlist only
+                self.progress.playlists(&[PlaylistInfo {
+                    path: String::new(),
+                    kind: PlaylistKind::Media,
+                }]);
                 self.record_media_playlist(
                     url,
                     "",
+                    0,
                     Some(Timed {
                         value: media_playlist,
                         time: playlist_time,
@@ -184,7 +201,69 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
         self.save_recording(playlist_time, master_name, master_name.to_string())
             .await?;
 
+        // Collect the recorded playlists in display order
+        let mut playlist_infos = Vec::new();
+        for variant in &master_playlist.variants {
+            if variant
+                .other_attributes
+                .as_ref()
+                .and_then(|attrs| attrs.get(ORIGINAL_URI))
+                .is_none()
+            {
+                continue;
+            }
+            let variant_dir = Path::new(&variant.uri)
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            playlist_infos.push(PlaylistInfo {
+                path: variant_dir,
+                kind: PlaylistKind::Variant {
+                    bandwidth: variant.bandwidth,
+                    resolution: variant
+                        .resolution
+                        .map(|resolution| (resolution.width, resolution.height)),
+                },
+            });
+        }
+        for media in &master_playlist.alternatives {
+            let Some(media_uri) = &media.uri else {
+                continue;
+            };
+            if media
+                .other_attributes
+                .as_ref()
+                .and_then(|attrs| attrs.get(ORIGINAL_URI))
+                .is_none()
+            {
+                continue;
+            }
+            let media_dir = Path::new(media_uri)
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let media_type = match media.media_type {
+                AlternativeMediaType::Audio => MediaType::Audio,
+                AlternativeMediaType::Video => MediaType::Video,
+                AlternativeMediaType::Subtitles => MediaType::Subtitles,
+                AlternativeMediaType::ClosedCaptions => MediaType::ClosedCaptions,
+                AlternativeMediaType::Other(_) => MediaType::Other,
+            };
+            playlist_infos.push(PlaylistInfo {
+                path: media_dir,
+                kind: PlaylistKind::Rendition {
+                    media_type,
+                    name: media.name.clone(),
+                    language: media.language.clone(),
+                },
+            });
+        }
+        self.progress.playlists(&playlist_infos);
+
         // Start recording selected variant streams and renditions
+        let mut playlist = 0;
         let mut join_set = JoinSet::new();
         for variant in &master_playlist.variants {
             let Some(other_attributes) = &variant.other_attributes else {
@@ -203,9 +282,10 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
             let token = token.clone();
             join_set.spawn(async move {
                 recorder
-                    .record_media_playlist(&variant_url, &variant_dir, None, token)
+                    .record_media_playlist(&variant_url, &variant_dir, playlist, None, token)
                     .await
             });
+            playlist += 1;
         }
         for media in &master_playlist.alternatives {
             let Some(media_uri) = &media.uri else {
@@ -227,9 +307,10 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
             let token = token.clone();
             join_set.spawn(async move {
                 recorder
-                    .record_media_playlist(&media_url, &media_dir, None, token)
+                    .record_media_playlist(&media_url, &media_dir, playlist, None, token)
                     .await
             });
+            playlist += 1;
         }
         // Wait for all tasks to complete
         while let Some(res) = join_set.join_next().await {
@@ -265,7 +346,7 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
         };
         let available = self.source.is_available(&url, None).await;
         if !available {
-            println!("Skipping {url}: not available");
+            self.progress.skipped(&url);
         }
         available
     }
@@ -332,11 +413,13 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
         &mut self,
         url: &Url,
         dir: &str,
+        playlist: usize,
         mut initial_playlist: Option<Timed<MediaPlaylist>>,
         token: CancellationToken,
     ) -> Result<(), RecordError> {
         let mut rewriter = Rewriter::new(url, dir.as_ref(), self.options.keep_names);
         let name_in_recording = rewriter.playlist_path();
+        let mut seen_segments = HashSet::new();
         let mut previous_playlist = None;
         let mut lowest_media_sequence = 0;
         let mut highest_media_sequence = None;
@@ -394,13 +477,38 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
             let mut buffer = vec![];
             media_playlist.write_to(&mut buffer)?;
             self.storage.write_playlist(&file_name, buffer).await?;
+            // Report the new segments
+            let mut new_segments = 0;
+            let mut new_gaps = 0;
+            for segment in &media_playlist.segments {
+                if seen_segments.insert(segment.uri.clone()) {
+                    if segment.unknown_tags.iter().any(|tag| tag.tag == GAP) {
+                        new_gaps += 1;
+                    } else {
+                        new_segments += 1;
+                    }
+                }
+            }
+            self.progress.playlist_loaded(
+                playlist,
+                &PlaylistUpdate {
+                    segments: media_playlist.segments.len(),
+                    new_segments,
+                    new_gaps,
+                    live: !media_playlist.end_list,
+                },
+            );
             // Update recording
             self.save_recording(playlist_time, &name_in_recording, file_name.to_string())
                 .await?;
             // Download segments
             download_segments(
-                &self.source,
-                &self.storage,
+                &Downloads {
+                    source: &self.source,
+                    storage: &self.storage,
+                    progress: &self.progress,
+                    playlist,
+                },
                 &media_playlist.segments,
                 dir,
                 MAX_CONCURRENT_DOWNLOADS,
@@ -411,6 +519,8 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
             if media_playlist.end_list {
                 break;
             }
+            let next_refresh = playlist_time + Duration::from_secs(media_playlist.target_duration);
+            self.progress.playlist_waiting(playlist, next_refresh);
             token
                 .run_until_cancelled(self.source.wait_for_refresh(
                     playlist_time,
@@ -420,6 +530,7 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
                 .ok_or(RecordError::Cancelled)?;
             previous_playlist = Some(media_playlist);
         }
+        self.progress.playlist_ended(playlist);
         Ok(())
     }
 }
@@ -535,17 +646,24 @@ fn find_segment_index_by_offset(segments: &[MediaSegment], offset: f32) -> Optio
     }
 }
 
+/// The shared context for downloading segment resources.
+struct Downloads<'a, S: Source, T: Storage> {
+    source: &'a S,
+    storage: &'a T,
+    progress: &'a Progress,
+    playlist: usize,
+}
+
 async fn download_segments<S: Source, T: Storage>(
-    source: &S,
-    storage: &T,
+    downloads: &Downloads<'_, S, T>,
     media_segments: &[MediaSegment],
     dir: &str,
     max_concurrent_downloads: usize,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
-    let segment_tasks = media_segments.iter().flat_map(|segment| {
-        make_segment_download_tasks(source, storage, dir, segment, token.clone())
-    });
+    let segment_tasks = media_segments
+        .iter()
+        .flat_map(|segment| make_segment_download_tasks(downloads, dir, segment, token.clone()));
     iter(segment_tasks)
         .boxed() // https://github.com/rust-lang/rust/issues/104382
         .buffered(max_concurrent_downloads)
@@ -554,26 +672,24 @@ async fn download_segments<S: Source, T: Storage>(
 }
 
 fn make_segment_download_tasks<'a, S: Source, T: Storage>(
-    source: &'a S,
-    storage: &'a T,
+    downloads: &'a Downloads<'a, S, T>,
     dir: &'a str,
     segment: &'a MediaSegment,
     token: CancellationToken,
 ) -> Vec<BoxFuture<'a, Result<(), RecordError>>> {
     let mut tasks = Vec::with_capacity(3);
-    tasks.push(download_segment(source, storage, segment, dir, token.clone()).boxed());
+    tasks.push(download_segment(downloads, segment, dir, token.clone()).boxed());
     if let Some(key) = segment.key.as_ref() {
-        tasks.push(download_key(source, storage, key, segment, dir, token.clone()).boxed());
+        tasks.push(download_key(downloads, key, segment, dir, token.clone()).boxed());
     }
     if let Some(map) = segment.map.as_ref() {
-        tasks.push(download_map(source, storage, map, segment, dir, token).boxed());
+        tasks.push(download_map(downloads, map, segment, dir, token).boxed());
     }
     tasks
 }
 
 async fn download_segment<S: Source, T: Storage>(
-    source: &S,
-    storage: &T,
+    downloads: &Downloads<'_, S, T>,
     media_segment: &MediaSegment,
     dir: &str,
     token: CancellationToken,
@@ -605,14 +721,25 @@ async fn download_segment<S: Source, T: Storage>(
             RecordError::Parse(anyhow!("Invalid byte range in #X-ORIGINAL-BYTE-RANGE: {e}"))
         })?;
     let path = join_path(Path::new(dir), &media_segment.uri);
-    storage
-        .store_resource(source, &segment_url, segment_byte_range, &path, token)
+    let download =
+        downloads
+            .progress
+            .download_started(downloads.playlist, &path, ResourceKind::Segment);
+    downloads
+        .storage
+        .store_resource(
+            downloads.source,
+            &segment_url,
+            segment_byte_range,
+            &*download,
+            &path,
+            token,
+        )
         .await
 }
 
 async fn download_key<S: Source, T: Storage>(
-    source: &S,
-    storage: &T,
+    downloads: &Downloads<'_, S, T>,
     key: &Key,
     media_segment: &MediaSegment,
     dir: &str,
@@ -630,19 +757,23 @@ async fn download_key<S: Source, T: Storage>(
         .as_str()
         .parse::<Url>()
         .map_err(|e| RecordError::Parse(anyhow!("Invalid URL: {e}")))?;
-    if !source.is_available(&key_url, None).await {
+    if !downloads.source.is_available(&key_url, None).await {
         return Ok(());
     }
     let key_file = key.uri.as_ref().unwrap();
     let path = join_path(Path::new(dir), key_file.as_str());
-    storage
-        .store_resource(source, &key_url, None, &path, token)
+    let download =
+        downloads
+            .progress
+            .download_started(downloads.playlist, &path, ResourceKind::Key);
+    downloads
+        .storage
+        .store_resource(downloads.source, &key_url, None, &*download, &path, token)
         .await
 }
 
 async fn download_map<S: Source, T: Storage>(
-    source: &S,
-    storage: &T,
+    downloads: &Downloads<'_, S, T>,
     map: &Map,
     media_segment: &MediaSegment,
     dir: &str,
@@ -668,12 +799,28 @@ async fn download_map<S: Source, T: Storage>(
         .map_err(|e| {
             RecordError::Parse(anyhow!("Invalid byte range in #X-ORIGINAL-BYTE-RANGE: {e}"))
         })?;
-    if !source.is_available(&map_url, map_byte_range).await {
+    if !downloads
+        .source
+        .is_available(&map_url, map_byte_range)
+        .await
+    {
         return Ok(());
     }
     let path = join_path(Path::new(dir), &map.uri);
-    storage
-        .store_resource(source, &map_url, map_byte_range, &path, token)
+    let download =
+        downloads
+            .progress
+            .download_started(downloads.playlist, &path, ResourceKind::InitSegment);
+    downloads
+        .storage
+        .store_resource(
+            downloads.source,
+            &map_url,
+            map_byte_range,
+            &*download,
+            &path,
+            token,
+        )
         .await
 }
 
@@ -707,33 +854,30 @@ mod tests {
         let token = CancellationToken::new();
 
         fn require_send<T: Send>(_t: T) {}
+        let progress: Progress = Arc::new(NoProgress);
         require_send(download_playlist(&source, &url));
-        require_send(download_segments(
-            &source,
-            &storage,
-            &[],
-            "",
-            0,
-            token.clone(),
-        ));
+        let downloads = Downloads {
+            source: &source,
+            storage: &storage,
+            progress: &progress,
+            playlist: 0,
+        };
+        require_send(download_segments(&downloads, &[], "", 0, token.clone()));
         require_send(download_segment(
-            &source,
-            &storage,
+            &downloads,
             &MediaSegment::empty(),
             "",
             token.clone(),
         ));
         require_send(download_key(
-            &source,
-            &storage,
+            &downloads,
             &Key::default(),
             &MediaSegment::empty(),
             "",
             token.clone(),
         ));
         require_send(download_map(
-            &source,
-            &storage,
+            &downloads,
             &Map::default(),
             &MediaSegment::empty(),
             "",
