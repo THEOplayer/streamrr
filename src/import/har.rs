@@ -3,6 +3,7 @@ use base64::prelude::*;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::value::RawValue;
+use std::borrow::Cow;
 use std::io::{Error, Result};
 use std::ops::Range;
 
@@ -71,14 +72,16 @@ impl Content {
         self.text.is_none() && self.size != 0
     }
 
-    pub(crate) fn text(&self) -> Result<String> {
+    pub(crate) fn text(&self) -> Result<Cow<'_, str>> {
+        #[derive(Deserialize)]
+        struct Text<'a>(#[serde(borrow)] Cow<'a, str>);
         let Some(raw_text) = self.text.as_ref() else {
             // Response has no content.
-            return Ok(String::new());
+            return Ok(Cow::Borrowed(""));
         };
-        // Parse back into a string.
-        let text = serde_json::from_str::<String>(raw_text.as_ref().get())
-            .map_err(|_| Error::other("invalid content"))?;
+        // Parse back into a string, borrowing it unless it contains escapes.
+        let Text(text) =
+            serde_json::from_str(raw_text.get()).map_err(|_| Error::other("invalid content"))?;
         Ok(text)
     }
 
@@ -89,7 +92,7 @@ impl Content {
             Some(encoding) if encoding == "base64" => BASE64_STANDARD
                 .decode(text.as_bytes())
                 .map_err(|_| Error::other("invalid base64")),
-            _ => Ok(text.into_bytes()),
+            _ => Ok(text.into_owned().into_bytes()),
         }
     }
 
@@ -272,6 +275,14 @@ mod tests {
 
     fn parse_content(json: &str) -> Content {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn text_borrows_without_escapes() {
+        let content = parse_content(r#"{"size":4,"text":"abcd"}"#);
+        assert!(matches!(content.text().unwrap(), Cow::Borrowed("abcd")));
+        let content = parse_content(r#"{"text":"ab\/cd"}"#);
+        assert!(matches!(content.text().unwrap(), Cow::Owned(ref s) if s == "ab/cd"));
     }
 
     #[test]
