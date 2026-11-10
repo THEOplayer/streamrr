@@ -1,5 +1,5 @@
 use std::path::Path;
-use url::Url;
+use url::{Position, Url};
 
 pub(crate) fn url_file_name(url: &Url) -> Option<&str> {
     let last_path_segment = url.path_segments()?.next_back()?;
@@ -9,4 +9,9 @@ pub(crate) fn url_file_name(url: &Url) -> Option<&str> {
 pub(crate) fn url_file_extension(url: &Url) -> Option<&str> {
     let last_path_segment = url.path_segments()?.next_back()?;
     Path::new(last_path_segment).extension()?.to_str()
+}
+
+/// A URL string without fragment, for comparing HAR request URLs.
+pub(crate) fn normalize_url(url: &Url) -> &str {
+    &url[..Position::AfterQuery]
 }

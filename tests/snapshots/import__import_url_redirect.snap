@@ -1,0 +1,38 @@
+---
+source: tests/import.rs
+assertion_line: 129
+expression: dump_dir(dir.path())
+---
+index.m3u8
+#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=100000,X-ORIGINAL-URI="https://d.example.com/d/index.m3u8"
+variant0/index.m3u8
+
+recording.json
+{
+  "playlists": {
+    "index.m3u8": [
+      {
+        "time": 1767268820000,
+        "path": "index.m3u8"
+      }
+    ],
+    "variant0/index.m3u8": [
+      {
+        "time": 1767268820200,
+        "path": "variant0/index.m3u8"
+      }
+    ]
+  }
+}
+
+variant0/index.m3u8
+#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXT-X-ORIGINAL-URI:https://d.example.com/d/seg.ts
+#EXTINF:6,
+segment-0.ts
+#EXT-X-ENDLIST
+
+variant0/segment-0.ts
+d-seg-1

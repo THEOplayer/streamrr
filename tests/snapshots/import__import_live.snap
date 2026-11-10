@@ -1,0 +1,70 @@
+---
+source: tests/import.rs
+assertion_line: 92
+expression: dump_dir(dir.path())
+---
+index-20260101T120000.000.m3u8
+#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXT-X-ORIGINAL-URI:https://example.com/live/seg0.ts
+#EXT-X-GAP
+#EXTINF:6,
+segment-0.ts
+#EXT-X-ORIGINAL-URI:https://example.com/live/seg1.ts
+#EXTINF:6,
+segment-1.ts
+
+index-20260101T120002.500.m3u8
+#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXT-X-ORIGINAL-URI:https://example.com/live/seg0.ts
+#EXT-X-GAP
+#EXTINF:6,
+segment-0.ts
+#EXT-X-ORIGINAL-URI:https://example.com/live/seg1.ts
+#EXTINF:6,
+segment-1.ts
+#EXT-X-ORIGINAL-URI:https://example.com/live/seg2.ts
+#EXTINF:6,
+segment-2.ts
+
+index-20260101T120008.000.m3u8
+#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXT-X-MEDIA-SEQUENCE:1
+#EXT-X-ORIGINAL-URI:https://example.com/live/seg1.ts
+#EXTINF:6,
+segment-1.ts
+#EXT-X-ORIGINAL-URI:https://example.com/live/seg2.ts
+#EXTINF:6,
+segment-2.ts
+#EXT-X-ORIGINAL-URI:https://example.com/live/seg3.ts
+#EXT-X-GAP
+#EXTINF:6,
+segment-3.ts
+
+recording.json
+{
+  "playlists": {
+    "index.m3u8": [
+      {
+        "time": 1767268800000,
+        "path": "index-20260101T120000.000.m3u8"
+      },
+      {
+        "time": 1767268802500,
+        "path": "index-20260101T120002.500.m3u8"
+      },
+      {
+        "time": 1767268808000,
+        "path": "index-20260101T120008.000.m3u8"
+      }
+    ]
+  }
+}
+
+segment-1.ts
+seg-1
+
+segment-2.ts
+seg-2

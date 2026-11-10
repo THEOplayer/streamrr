@@ -3,6 +3,9 @@ This software bundles the following third-party libraries:
  - anyhow version 1.0.102 (https://github.com/dtolnay/anyhow)  
    Author: David Tolnay <dtolnay@gmail.com>  
    License: MIT OR Apache-2.0
+ - base64 version 0.22.1 (https://github.com/marshallpierce/rust-base64)  
+   Author: Marshall Pierce <marshall@mpierce.org>  
+   License: MIT OR Apache-2.0
  - chrono version 0.4.44 (https://github.com/chronotope/chrono)  
    License: MIT OR Apache-2.0
  - clap version 4.6.0 (https://github.com/clap-rs/clap)  
