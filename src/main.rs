@@ -2,7 +2,6 @@ use std::fs::File;
 use std::io::BufReader;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 mod ui;
 use std::str::FromStr;
@@ -159,11 +158,7 @@ async fn main() -> anyhow::Result<()> {
             let headers = headers.into_iter().collect::<HeaderMap>();
             let options = args.into_record_options(variant_select, headers);
             let token = CancellationToken::new();
-            let progress = Arc::new(ui::LogProgress::new(
-                "Recording",
-                "Recorded",
-                recording_path.clone(),
-            ));
+            let progress = ui::CliProgress::create("Recording", "Recorded", recording_path.clone());
             let record_task = {
                 let token = token.clone();
                 let task_progress: Progress = progress.clone();
@@ -230,11 +225,7 @@ async fn main() -> anyhow::Result<()> {
             let options = args.into_record_options(variant_select, HeaderMap::new());
             let token = CancellationToken::new();
             let har = load_har(&har_path)?;
-            let progress = Arc::new(ui::LogProgress::new(
-                "Importing",
-                "Imported",
-                recording_path.clone(),
-            ));
+            let progress = ui::CliProgress::create("Importing", "Imported", recording_path.clone());
             let import_task = {
                 let token = token.clone();
                 let task_progress: Progress = progress.clone();
