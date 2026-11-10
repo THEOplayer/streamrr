@@ -164,7 +164,7 @@ async fn import_to_memory_matches_fs() {
         "two_streams.har",
     ] {
         let dir = TempDir::new().unwrap();
-        let fs_storage = FsStorage::new(dir.path()).await.unwrap();
+        let fs_storage = FsStorage::new(dir.path());
         streamrr::import::import_har_into(
             load_har(fixture),
             None,
@@ -243,4 +243,43 @@ async fn import_to_memory_matches_fs() {
             "{fixture}: recording.json"
         );
     }
+}
+
+/// A failed import must not touch an existing recording directory.
+#[tokio::test]
+async fn failed_import_keeps_existing_recording() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("recording.json"), r#"{"existing":true}"#).unwrap();
+    let url = Url::parse("https://c.example.com/master.m3u8").unwrap();
+    let result = import_har(
+        load_har("two_streams.har"),
+        Some(url),
+        dir.path(),
+        options(),
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(matches!(result, Err(RecordError::NotFound(_))));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("recording.json")).unwrap(),
+        r#"{"existing":true}"#
+    );
+}
+
+/// A failed import must not create the destination directory.
+#[tokio::test]
+async fn failed_import_creates_nothing() {
+    let dir = TempDir::new().unwrap();
+    let dest = dir.path().join("recording");
+    let url = Url::parse("https://c.example.com/master.m3u8").unwrap();
+    let result = import_har(
+        load_har("two_streams.har"),
+        Some(url),
+        &dest,
+        options(),
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(matches!(result, Err(RecordError::NotFound(_))));
+    assert!(!dest.exists());
 }

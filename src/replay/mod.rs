@@ -484,7 +484,7 @@ mod tests {
     #[tokio::test]
     async fn replay_directory_store() {
         let dir = tempfile::tempdir().unwrap();
-        let storage = FsStorage::new(dir.path()).await.unwrap();
+        let storage = FsStorage::new(dir.path());
         import_har_into(
             load_har_fixture("vod.har"),
             None,

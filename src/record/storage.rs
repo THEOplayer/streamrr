@@ -39,20 +39,19 @@ pub trait Storage: Clone + Send + Sync + 'static {
 }
 
 /// Stores a recording as files in a directory on disk.
+/// Nothing is created until the first write.
 #[derive(Clone)]
 pub struct FsStorage {
     dest: PathBuf,
-    recording_file: Arc<Mutex<fs::File>>,
+    recording_file: Arc<Mutex<Option<fs::File>>>,
 }
 
 impl FsStorage {
-    pub async fn new(dest: &Path) -> io::Result<Self> {
-        fs::create_dir_all(dest).await?;
-        let file = fs::File::create(dest.join("recording.json")).await?;
-        Ok(Self {
+    pub fn new(dest: &Path) -> Self {
+        Self {
             dest: dest.to_path_buf(),
-            recording_file: Arc::new(Mutex::new(file)),
-        })
+            recording_file: Arc::new(Mutex::new(None)),
+        }
     }
 }
 
@@ -100,7 +99,15 @@ impl Storage for FsStorage {
     async fn save_recording(&self, recording: &Recording) -> io::Result<()> {
         let recording_json = serde_json::to_string_pretty(recording)?;
         let recording_bytes = recording_json.as_bytes();
-        let mut file = self.recording_file.lock().await;
+        let mut recording_file = self.recording_file.lock().await;
+        let file = match recording_file.as_mut() {
+            Some(file) => file,
+            None => {
+                fs::create_dir_all(&self.dest).await?;
+                let file = fs::File::create(self.dest.join("recording.json")).await?;
+                recording_file.insert(file)
+            }
+        };
         file.rewind().await?;
         file.write_all(recording_bytes).await?;
         file.set_len(recording_bytes.len() as u64).await?;

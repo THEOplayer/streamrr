@@ -103,7 +103,7 @@ pub async fn import_har(
     options: RecordOptions,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
-    let storage = FsStorage::new(dest).await?;
+    let storage = FsStorage::new(dest);
     import_har_into(har, url, storage, options, token).await?;
     Ok(())
 }

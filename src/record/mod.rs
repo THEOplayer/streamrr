@@ -69,7 +69,7 @@ pub async fn record(
         .build()
         .map_err(|_| RecordError::Config("Error while building HTTP client"))?;
     let source = HttpSource::new(client);
-    let storage = FsStorage::new(dest).await?;
+    let storage = FsStorage::new(dest);
     let recorder = Recorder::new(source, storage, options);
     recorder.run(url, token).await
 }
@@ -703,7 +703,7 @@ mod tests {
         let url = Url::parse("https://a.com/").unwrap();
         let dest = tempfile::tempdir().unwrap();
         let source = HttpSource::new(Client::new());
-        let storage = FsStorage::new(dest.path()).await.unwrap();
+        let storage = FsStorage::new(dest.path());
         let token = CancellationToken::new();
 
         fn require_send<T: Send>(_t: T) {}
