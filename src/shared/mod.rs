@@ -11,6 +11,8 @@ mod bom;
 mod byte_range;
 mod ctrlc;
 mod hexstring;
+mod path;
 mod recording;
 mod timed;
 mod url;
+pub(crate) use path::*;

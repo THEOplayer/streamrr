@@ -17,6 +17,9 @@ This software bundles the following third-party libraries:
  - m3u8-rs version 6.0.0 (https://github.com/rutgersc/m3u8-rs)  
    Author: Rutger  
    License: MIT
+ - mime_guess version 2.0.5 (https://github.com/abonander/mime_guess)  
+   Author: Austin Bonander <austin.bonander@gmail.com>  
+   License: MIT
  - reqwest version 0.13.2 (https://github.com/seanmonstar/reqwest)  
    Author: Sean McArthur <sean@seanmonstar.com>  
    License: MIT OR Apache-2.0

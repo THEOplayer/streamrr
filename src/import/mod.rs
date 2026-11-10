@@ -1,6 +1,6 @@
 pub(crate) mod har;
 
-use crate::record::{HarSource, RecordError, RecordOptions, Recorder, Source};
+use crate::record::{FsStorage, HarSource, RecordError, RecordOptions, Recorder, Source, Storage};
 use crate::shared::{BOM, StripBom};
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
@@ -48,13 +48,31 @@ fn is_hls_playlist(entry: &Entry) -> bool {
     bytes.as_slice().strip_bom().starts_with(b"#EXTM3U")
 }
 
-pub async fn import_har(
+/// The URL and `startedDateTime` of the earliest HLS playlist in the HAR.
+fn first_hls_playlist(har: &Har) -> Result<(Url, DateTime<Utc>), RecordError> {
+    let mut entries: Vec<&Entry> = har.log.entries.iter().collect();
+    entries.sort_by_key(|entry| entry.started_date_time);
+    let first_playlist_request = entries
+        .into_iter()
+        .find(|entry| is_hls_playlist(entry))
+        .ok_or_else(|| Error::other("no playlist found"))?;
+    let url = first_playlist_request
+        .request
+        .url
+        .parse::<Url>()
+        .map_err(|e| RecordError::Parse(anyhow!("Invalid URL: {e}")))?;
+    Ok((url, first_playlist_request.started_date_time))
+}
+
+/// Run the recorder over the HAR into the given storage,
+/// returning the source (e.g. for decoding resources later).
+pub async fn import_har_into<T: Storage>(
     har: Har,
     url: Option<Url>,
-    dest: &Path,
+    storage: T,
     options: RecordOptions,
     token: CancellationToken,
-) -> Result<(), RecordError> {
+) -> Result<HarSource, RecordError> {
     // Create a source that reads from the HAR
     let (url, source) = match url {
         Some(url) => {
@@ -67,23 +85,25 @@ pub async fn import_har(
         }
         None => {
             // Find the first HLS playlist in the HAR
-            let mut entries: Vec<&Entry> = har.log.entries.iter().collect();
-            entries.sort_by_key(|entry| entry.started_date_time);
-            let first_playlist_request = entries
-                .into_iter()
-                .find(|entry| is_hls_playlist(entry))
-                .ok_or_else(|| Error::other("no playlist found"))?;
-            let url = first_playlist_request
-                .request
-                .url
-                .parse::<Url>()
-                .map_err(|e| RecordError::Parse(anyhow!("Invalid URL: {e}")))?;
-            let time = first_playlist_request.started_date_time;
+            let (url, time) = first_hls_playlist(&har)?;
             (url, HarSource::new(har, time))
         }
     };
     println!("Importing {url}");
 
-    let recorder = Recorder::new(source, dest, options).await?;
-    recorder.run(&url, token).await
+    let recorder = Recorder::new(source.clone(), storage, options);
+    recorder.run(&url, token).await?;
+    Ok(source)
+}
+
+pub async fn import_har(
+    har: Har,
+    url: Option<Url>,
+    dest: &Path,
+    options: RecordOptions,
+    token: CancellationToken,
+) -> Result<(), RecordError> {
+    let storage = FsStorage::new(dest);
+    import_har_into(har, url, storage, options, token).await?;
+    Ok(())
 }
