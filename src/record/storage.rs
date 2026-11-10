@@ -1,4 +1,4 @@
-use crate::record::{RecordError, Source};
+use crate::record::{RecordError, Source, WithSize};
 use crate::shared::{ByteRange, Recording};
 use futures::TryStreamExt;
 use std::collections::HashMap;
@@ -86,12 +86,11 @@ impl Storage for FsStorage {
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
             Err(err) => return Err(err.into()),
         };
-        let response_stream = token
+        let WithSize { contents, .. } = token
             .run_until_cancelled(source.request_stream(url, byte_range))
             .await
-            .ok_or(RecordError::Cancelled)?
-            .map_err(io::Error::other);
-        let mut response_stream = pin!(StreamReader::new(response_stream));
+            .ok_or(RecordError::Cancelled)?;
+        let mut response_stream = pin!(StreamReader::new(contents.map_err(io::Error::other)));
         tokio::io::copy_buf(&mut response_stream, &mut file).await?;
         Ok(())
     }

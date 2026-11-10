@@ -51,10 +51,21 @@ pub trait Source: Clone + Send + Sync {
         &self,
         url: &Url,
         byte_range: Option<ByteRange>,
-    ) -> impl Future<Output = impl Stream<Item = Result<Bytes, Self::Error>> + Send> + Send {
+    ) -> impl Future<Output = WithSize<impl Stream<Item = Result<Bytes, Self::Error>> + Send>> + Send
+    {
         async move {
             let bytes = self.request(url, byte_range).await.map(|bytes| bytes.value);
-            once(ready(bytes))
+            let size = bytes.as_ref().ok().map(|bytes| bytes.len() as u64);
+            WithSize {
+                size,
+                contents: once(ready(bytes)),
+            }
         }
     }
+}
+
+/// A resource's contents along with its total size (if known).
+pub struct WithSize<S> {
+    pub size: Option<u64>,
+    pub contents: S,
 }
