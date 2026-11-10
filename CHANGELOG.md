@@ -5,6 +5,7 @@
 - Added `import` command to import an HTTP Archive (HAR) file as a recording. ([#9](https://github.com/THEOplayer/streamrr/pull/9))
 - The `replay` command now also accepts an HTTP Archive (HAR) file, which is served directly without importing it first.
 - Fixed an issue where live streams recorded on Windows could not be replayed. Playlist paths in `recording.json` now always use `/` as separator.
+- `record` and `import` now show live progress in the terminal.
 
 ## v0.3.3 (2026-07-01)
 
