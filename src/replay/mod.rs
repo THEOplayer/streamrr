@@ -347,6 +347,7 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
         message = "Not found".to_owned();
     } else if let Some(e) = err.find::<ServerError>() {
         message = e.to_string();
+        eprintln!("{message}");
         code = StatusCode::INTERNAL_SERVER_ERROR;
     } else {
         eprintln!("Unhandled rejection: {:?}", err);
