@@ -1,4 +1,4 @@
-use crate::ui::human_bytes;
+use crate::ui::{CliProgress, display_name, human_bytes};
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -42,9 +42,11 @@ impl LogProgress {
             .cloned()
             .unwrap_or_else(|| format!("playlist{playlist}"))
     }
+}
 
+impl CliProgress for LogProgress {
     /// Print the final summary line.
-    pub fn finish(&self) {
+    fn finish(&self) {
         let elapsed = self.started_at.elapsed().as_secs();
         println!(
             "{} {} segments ({}) in {:02}:{:02}",
@@ -69,13 +71,7 @@ impl RecordProgress for LogProgress {
     fn playlists(&self, playlists: &[PlaylistInfo]) {
         let mut names = self.names.lock().unwrap();
         names.clear();
-        names.extend(playlists.iter().map(|info| {
-            if info.path.is_empty() {
-                "media".to_string()
-            } else {
-                info.path.clone()
-            }
-        }));
+        names.extend(playlists.iter().map(|info| display_name(&info.path)));
     }
 
     fn playlist_loaded(&self, playlist: usize, update: &PlaylistUpdate) {

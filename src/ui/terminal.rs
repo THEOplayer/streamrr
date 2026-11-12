@@ -1,4 +1,4 @@
-use crate::ui::human_bytes;
+use crate::ui::{CliProgress, display_name, human_bytes};
 use chrono::{DateTime, Utc};
 use console::{Style, Term, measure_text_width};
 use indicatif::{MultiProgress, ProgressBar};
@@ -172,7 +172,7 @@ impl SpeedWindow {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum PlStatus {
+enum Status {
     Working,
     Waiting(DateTime<Utc>),
     Done,
@@ -193,9 +193,11 @@ struct PlaylistState {
     done: usize,
     gaps: usize,
     bytes: u64,
-    status: PlStatus,
+    status: Status,
     downloads: Vec<Arc<ActiveDownload>>,
     speed: SpeedWindow,
+    row: ProgressBar,
+    detail: ProgressBar,
 }
 
 impl PlaylistState {
@@ -226,27 +228,27 @@ struct Shared {
     total_bytes: u64,
     speed: SpeedWindow,
     playlists: Vec<PlaylistState>,
-    url_widths: (usize, usize), // max name/label widths
+    column_widths: (usize, usize), // max name/label widths
+    /// Whether to draw the final frame (stopped/done states, average speed).
+    finished: bool,
 }
 
 /// The terminal progress UI: a stable panel of one row + one detail
 /// line per playlist under a 2-line header, redrawn in place.
 pub struct TerminalProgress {
     verb: &'static str,
-    summary_verb: &'static str,
     dest: String,
     started_at: Instant,
     multi: MultiProgress,
     header: ProgressBar,
     summary: ProgressBar,
-    rows: Mutex<Vec<(ProgressBar, ProgressBar)>>,
     shared: Arc<Mutex<Shared>>,
     stop: Arc<AtomicBool>,
     ticker: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl TerminalProgress {
-    pub fn new(verb: &'static str, summary_verb: &'static str, dest: String) -> Self {
+    pub fn new(verb: &'static str, dest: String) -> Self {
         let multi = MultiProgress::new();
         let header = multi.add(ProgressBar::new(1));
         header.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
@@ -258,7 +260,8 @@ impl TerminalProgress {
             total_bytes: 0,
             speed: SpeedWindow::new(),
             playlists: Vec::new(),
-            url_widths: (0, 0),
+            column_widths: (0, 0),
+            finished: false,
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let ticker = {
@@ -272,15 +275,7 @@ impl TerminalProgress {
             std::thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     let mut shared = shared.lock().unwrap();
-                    redraw(
-                        &verb,
-                        &dest,
-                        started_at,
-                        &mut shared,
-                        &header,
-                        &summary,
-                        None,
-                    );
+                    redraw(&verb, &dest, started_at, &mut shared, &header, &summary);
                     drop(shared);
                     std::thread::sleep(TICK);
                 }
@@ -288,22 +283,22 @@ impl TerminalProgress {
         };
         Self {
             verb,
-            summary_verb,
             dest,
             started_at: Instant::now(),
             multi,
             header,
             summary,
-            rows: Mutex::new(Vec::new()),
             shared,
             stop,
             ticker: Mutex::new(Some(ticker)),
         }
     }
+}
 
+impl CliProgress for TerminalProgress {
     /// Stop the ticker, render a final frame and leave the panel in
     /// scrollback with final statuses.
-    pub fn finish(&self) {
+    fn finish(&self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(ticker) = self.ticker.lock().unwrap().take() {
             let _ = ticker.join();
@@ -311,11 +306,11 @@ impl TerminalProgress {
         let mut shared = self.shared.lock().unwrap();
         // Mark unfinished playlists as stopped.
         for playlist in &mut shared.playlists {
-            if !matches!(playlist.status, PlStatus::Done) {
-                playlist.status = PlStatus::Stopped;
+            if !matches!(playlist.status, Status::Done) {
+                playlist.status = Status::Stopped;
             }
         }
-        let rows = self.rows.lock().unwrap();
+        shared.finished = true;
         redraw(
             self.verb,
             &self.dest,
@@ -323,24 +318,15 @@ impl TerminalProgress {
             &mut shared,
             &self.header,
             &self.summary,
-            Some(&rows),
         );
-        for (_, detail) in rows.iter() {
-            detail.finish_and_clear();
+        for playlist in &mut shared.playlists {
+            playlist.detail.finish_and_clear();
         }
-        for (row, _) in rows.iter() {
-            row.finish();
+        for playlist in &shared.playlists {
+            playlist.row.finish();
         }
         self.header.finish();
         self.summary.finish();
-        println!(
-            "{} {} segments ({}) in {:02}:{:02}",
-            self.summary_verb,
-            shared.total_segments,
-            human_bytes(shared.total_bytes),
-            self.started_at.elapsed().as_secs() / 60,
-            self.started_at.elapsed().as_secs() % 60,
-        );
     }
 }
 
@@ -352,21 +338,33 @@ fn redraw(
     shared: &mut Shared,
     header: &ProgressBar,
     summary: &ProgressBar,
-    rows: Option<&Vec<(ProgressBar, ProgressBar)>>,
 ) {
     let (_, width) = Term::stderr().size();
     let width = width as usize;
     let now = Instant::now();
 
     // Header
+    let bullet = if shared.finished {
+        if shared
+            .playlists
+            .iter()
+            .all(|playlist| matches!(playlist.status, Status::Done))
+        {
+            Style::new().green().apply_to("✓").to_string()
+        } else {
+            Style::new().red().apply_to("■").to_string()
+        }
+    } else {
+        Style::new().green().apply_to("●").to_string()
+    };
     let title = format!(
         "{} {} → {}",
-        Style::new().green().apply_to("●"),
+        bullet,
         Style::new().bold().apply_to(format!(
             "{verb} {}",
             truncate_middle(
                 &shared.url,
-                width.saturating_sub(measure_text_width(verb) + dest.len() + 5)
+                width.saturating_sub(measure_text_width(verb) + measure_text_width(dest) + 5)
             )
         )),
         dest,
@@ -375,8 +373,17 @@ fn redraw(
 
     // Summary
     shared.speed.sample(now, shared.total_bytes);
-    let speed = shared.speed.bytes_per_second();
     let elapsed = started_at.elapsed().as_secs();
+    let speed = if shared.finished {
+        // Final frame: average speed over the whole run.
+        if elapsed == 0 {
+            shared.total_bytes as f64
+        } else {
+            shared.total_bytes as f64 / elapsed as f64
+        }
+    } else {
+        shared.speed.bytes_per_second()
+    };
     summary.set_message(format!(
         "  {:02}:{:02} · {} segments · {} · {}/s",
         elapsed / 60,
@@ -386,15 +393,14 @@ fn redraw(
         human_bytes(speed as u64),
     ));
 
-    if let Some(rows) = rows {
-        for ((row, detail), playlist) in rows.iter().zip(shared.playlists.iter_mut()) {
-            row.set_message(row_text(playlist, shared.url_widths, width, now));
-            detail.set_message(detail_text(playlist, width));
-            // Purge finished/aborted downloads.
-            playlist
-                .downloads
-                .retain(|dl| dl.state.load(Ordering::Relaxed) == 0);
-        }
+    for playlist in &mut shared.playlists {
+        let row_message = row_text(playlist, shared.column_widths, width, now);
+        playlist.row.set_message(row_message);
+        playlist.detail.set_message(detail_text(playlist, width));
+        // Purge finished/aborted downloads.
+        playlist
+            .downloads
+            .retain(|dl| dl.state.load(Ordering::Relaxed) == 0);
     }
 }
 
@@ -405,9 +411,6 @@ fn row_text(
     now: Instant,
 ) -> String {
     playlist.speed.sample(now, playlist.bytes);
-    let name = truncate_middle(&playlist.name, name_w.min(MAX_NAME_WIDTH));
-    let label = truncate_middle(&playlist.label, label_w.min(MAX_LABEL_WIDTH));
-    let bar = render_bar(playlist.fraction(), BAR_WIDTH);
     let counts = if playlist.gaps > 0 {
         format!(
             "{}/{} {}",
@@ -429,9 +432,9 @@ fn row_text(
         format!("{}/{}", playlist.done, playlist.total)
     };
     let status = match playlist.status {
-        PlStatus::Done => Style::new().green().apply_to("✓ done").to_string(),
-        PlStatus::Stopped => Style::new().red().apply_to("■ stopped").to_string(),
-        PlStatus::Waiting(next) => {
+        Status::Done => Style::new().green().apply_to("✓ done").to_string(),
+        Status::Stopped => Style::new().red().apply_to("■ stopped").to_string(),
+        Status::Waiting(next) => {
             let secs = (next - Utc::now()).num_seconds();
             if secs > 0 {
                 Style::new()
@@ -442,7 +445,7 @@ fn row_text(
                 Style::new().dim().apply_to("↻ refreshing").to_string()
             }
         }
-        PlStatus::Working => {
+        Status::Working => {
             let active = playlist
                 .downloads
                 .iter()
@@ -460,19 +463,39 @@ fn row_text(
             }
         }
     };
-    let name_col = format!("{name:>width$}", width = name_w.min(MAX_NAME_WIDTH));
-    let label_col = format!("{label:<width$}", width = label_w.min(MAX_LABEL_WIDTH));
-    let line = format!(
-        "  {name_col}  {label_col}  [{bar}]  {counts}  {}  {status}",
-        human_bytes(playlist.bytes),
-    );
-    // No line may wrap: fit to the terminal width.
+    let size = human_bytes(playlist.bytes);
+    let mut name_w = name_w.min(MAX_NAME_WIDTH);
+    let mut label_w = label_w.min(MAX_LABEL_WIDTH);
+    let mut bar_w = BAR_WIDTH;
+    let build = |name_w: usize, label_w: usize, bar_w: usize| {
+        let name = truncate_middle(&playlist.name, name_w);
+        let label = truncate_middle(&playlist.label, label_w);
+        let bar = render_bar(playlist.fraction(), bar_w);
+        format!("  {name:<name_w$}  {label:<label_w$}  [{bar}]  {counts}  {size}  {status}")
+    };
+    let mut line = build(name_w, label_w, bar_w);
+    // Shrink the label column first, then the bar, then the name.
+    while measure_text_width(&line) > width && label_w > 0 {
+        label_w -= 1;
+        line = build(name_w, label_w, bar_w);
+    }
+    while measure_text_width(&line) > width && bar_w > 10 {
+        bar_w -= 1;
+        line = build(name_w, label_w, bar_w);
+    }
+    while measure_text_width(&line) > width && name_w > 8 {
+        name_w -= 1;
+        line = build(name_w, label_w, bar_w);
+    }
+    // Last resort: truncate the end of the line (ANSI-aware).
     if measure_text_width(&line) > width {
         let plain = format!(
-            "  {name_col}  {label_col}  [{bar}]  {counts_plain}  {}  {status}",
-            human_bytes(playlist.bytes),
+            "  {name:<name_w$}  {label:<label_w$}  [{bar}]  {counts_plain}  {size}  {status}",
+            name = truncate_middle(&playlist.name, name_w),
+            label = truncate_middle(&playlist.label, label_w),
+            bar = render_bar(playlist.fraction(), bar_w),
         );
-        truncate_middle(&plain, width)
+        console::truncate_str(&plain, width, "…").to_string()
     } else {
         line
     }
@@ -537,10 +560,17 @@ fn label_of(kind: &PlaylistKind) -> String {
 }
 
 fn human_bandwidth(bandwidth: u64) -> String {
+    fn scaled(bandwidth: u64, unit: u64, suffix: &str) -> String {
+        if bandwidth.is_multiple_of(unit) {
+            format!("{}{}", bandwidth / unit, suffix)
+        } else {
+            format!("{:.1}{}", bandwidth as f64 / unit as f64, suffix)
+        }
+    }
     if bandwidth >= 1_000_000 {
-        format!("{}M", bandwidth / 1_000_000)
+        scaled(bandwidth, 1_000_000, "M")
     } else if bandwidth >= 1_000 {
-        format!("{}k", bandwidth / 1_000)
+        scaled(bandwidth, 1_000, "k")
     } else {
         format!("{bandwidth}")
     }
@@ -557,16 +587,15 @@ impl RecordProgress for TerminalProgress {
 
     fn playlists(&self, playlists: &[PlaylistInfo]) {
         let mut shared = self.shared.lock().unwrap();
-        let mut rows = self.rows.lock().unwrap();
         for info in playlists {
-            let name = if info.path.is_empty() {
-                "media".to_string()
-            } else {
-                info.path.clone()
-            };
+            let name = display_name(&info.path);
             let label = label_of(&info.kind);
-            shared.url_widths.0 = shared.url_widths.0.max(measure_text_width(&name));
-            shared.url_widths.1 = shared.url_widths.1.max(measure_text_width(&label));
+            shared.column_widths.0 = shared.column_widths.0.max(measure_text_width(&name));
+            shared.column_widths.1 = shared.column_widths.1.max(measure_text_width(&label));
+            let row = self.multi.add(ProgressBar::new(1));
+            row.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
+            let detail = self.multi.add(ProgressBar::new(1));
+            detail.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
             shared.playlists.push(PlaylistState {
                 name,
                 label,
@@ -574,15 +603,12 @@ impl RecordProgress for TerminalProgress {
                 done: 0,
                 gaps: 0,
                 bytes: 0,
-                status: PlStatus::Working,
+                status: Status::Working,
                 downloads: Vec::new(),
                 speed: SpeedWindow::new(),
+                row,
+                detail,
             });
-            let row = self.multi.add(ProgressBar::new(1));
-            row.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
-            let detail = self.multi.add(ProgressBar::new(1));
-            detail.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
-            rows.push((row, detail));
         }
     }
 
@@ -597,13 +623,13 @@ impl RecordProgress for TerminalProgress {
 
     fn playlist_waiting(&self, playlist: usize, next_refresh: DateTime<Utc>) {
         if let Some(playlist) = self.shared.lock().unwrap().playlists.get_mut(playlist) {
-            playlist.status = PlStatus::Waiting(next_refresh);
+            playlist.status = Status::Waiting(next_refresh);
         }
     }
 
     fn playlist_ended(&self, playlist: usize) {
         if let Some(playlist) = self.shared.lock().unwrap().playlists.get_mut(playlist) {
-            playlist.status = PlStatus::Done;
+            playlist.status = Status::Done;
         }
     }
 
@@ -753,5 +779,46 @@ mod tests {
         let line = fit_downloads(&entries, 50);
         assert!(measure_text_width(&line) <= 50);
         assert!(line.contains("more"));
+    }
+
+    fn active(name: &str) -> Arc<ActiveDownload> {
+        Arc::new(ActiveDownload {
+            name: name.to_string(),
+            size: AtomicU64::new(310 * 1024),
+            got: AtomicU64::new(120 * 1024),
+            state: AtomicU8::new(0),
+        })
+    }
+
+    #[test]
+    fn row_and_detail_fit_any_width() {
+        let downloads: Vec<_> = (0..4)
+            .map(|i| active(&format!("segment-with-a-quite-long-name-{i:04}.m4s")))
+            .collect();
+        for width in 20..=200 {
+            let mut playlist = PlaylistState {
+                name: "variant-with-a-very-long-name-0".to_string(),
+                label: "audio a very long rendition name (en)".to_string(),
+                total: 612,
+                done: 610,
+                gaps: 3,
+                bytes: 612 * 310 * 1024,
+                status: Status::Working,
+                downloads: downloads.clone(),
+                speed: SpeedWindow::new(),
+                row: ProgressBar::hidden(),
+                detail: ProgressBar::hidden(),
+            };
+            let row = row_text(&mut playlist, (32, 40), width, Instant::now());
+            assert!(
+                measure_text_width(&row) <= width,
+                "row wider than {width}: {row}"
+            );
+            let detail = detail_text(&playlist, width);
+            assert!(
+                measure_text_width(&detail) <= width,
+                "detail wider than {width}: {detail}"
+            );
+        }
     }
 }
