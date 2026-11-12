@@ -414,7 +414,7 @@ fn redraw(
 }
 
 fn row_columns((name_w, label_w): (usize, usize), width: usize) -> (usize, usize, usize) {
-    const TAIL_WIDTH: usize = 34;
+    const TAIL_WIDTH: usize = 36;
     let mut name_w = name_w.min(MAX_NAME_WIDTH);
     let mut label_w = label_w.min(MAX_LABEL_WIDTH);
     let min_label_w = label_w.min(8);
@@ -502,7 +502,7 @@ fn row_text(
         String::new()
     };
     let bar = render_bar(playlist.fraction(), bar_w);
-    let line = format!("  {name:<name_w$}  {label}[{bar}]  {counts} {size} {status}");
+    let line = format!("  {name:<name_w$}  {label}[{bar}]  {counts}  {size}  {status}");
     console::truncate_str(&line, width, "…").to_string()
 }
 
