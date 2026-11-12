@@ -16,6 +16,24 @@ pub trait CliProgress: RecordProgress {
     fn finish(&self);
 }
 
+pub(crate) fn counted(count: usize, singular: &str) -> String {
+    format!("{count} {singular}{}", if count == 1 { "" } else { "s" })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::counted;
+
+    #[test]
+    fn counted_progress_labels() {
+        for noun in ["segment", "gap", "new segment"] {
+            assert_eq!(counted(0, noun), format!("0 {noun}s"));
+            assert_eq!(counted(1, noun), format!("1 {noun}"));
+            assert_eq!(counted(2, noun), format!("2 {noun}s"));
+        }
+    }
+}
+
 /// Create the appropriate progress reporter for this environment.
 pub fn create(
     verb: &'static str,

@@ -1,4 +1,4 @@
-use crate::ui::{CliProgress, display_name, human_bytes};
+use crate::ui::{CliProgress, counted, display_name, human_bytes};
 use chrono::{DateTime, Utc};
 use console::{Style, Term, measure_text_width};
 use indicatif::{MultiProgress, ProgressBar};
@@ -393,10 +393,10 @@ fn redraw(
         shared.speed.bytes_per_second().unwrap_or(0.0)
     };
     let line = format!(
-        "  {:02}:{:02} · {} segments · {} · {}/s",
+        "  {:02}:{:02} · {} · {} · {}/s",
         elapsed / 60,
         elapsed % 60,
-        shared.total_segments,
+        counted(shared.total_segments, "segment"),
         human_bytes(shared.total_bytes),
         human_bytes(speed as u64),
     );
@@ -419,9 +419,8 @@ fn row_columns((name_w, label_w): (usize, usize), width: usize) -> (usize, usize
     let mut label_w = label_w.min(MAX_LABEL_WIDTH);
     let min_label_w = label_w.min(8);
     let mut bar_w = BAR_WIDTH;
-    let prefix_width = |name_w, label_w, bar_w| {
-        name_w + bar_w + 8 + if label_w > 0 { label_w + 2 } else { 0 }
-    };
+    let prefix_width =
+        |name_w, label_w, bar_w| name_w + bar_w + 8 + if label_w > 0 { label_w + 2 } else { 0 };
     let available = width.saturating_sub(TAIL_WIDTH);
     while prefix_width(name_w, label_w, bar_w) > available && label_w > 0 {
         label_w -= 1;
@@ -452,7 +451,7 @@ fn row_text(
             playlist.total,
             Style::new()
                 .yellow()
-                .apply_to(format!("({} gaps)", playlist.gaps))
+                .apply_to(format!("({})", counted(playlist.gaps, "gap")))
         )
     } else {
         format!("{}/{}", playlist.done, playlist.total)

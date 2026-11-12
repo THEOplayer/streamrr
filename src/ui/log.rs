@@ -1,4 +1,4 @@
-use crate::ui::{CliProgress, display_name, human_bytes};
+use crate::ui::{CliProgress, counted, display_name, human_bytes};
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -49,9 +49,9 @@ impl CliProgress for LogProgress {
     fn finish(&self) {
         let elapsed = self.started_at.elapsed().as_secs();
         println!(
-            "{} {} segments ({}) in {:02}:{:02}",
+            "{} {} ({}) in {:02}:{:02}",
             self.summary_verb,
-            self.segments.load(Ordering::Relaxed),
+            counted(self.segments.load(Ordering::Relaxed), "segment"),
             human_bytes(self.bytes.load(Ordering::Relaxed)),
             elapsed / 60,
             elapsed % 60,
@@ -78,12 +78,12 @@ impl RecordProgress for LogProgress {
         self.segments
             .fetch_add(update.new_segments, Ordering::Relaxed);
         let mut line = format!(
-            "{}: playlist loaded, {} new segments",
+            "{}: playlist loaded, {}",
             self.name(playlist),
-            update.new_segments,
+            counted(update.new_segments, "new segment"),
         );
         if update.new_gaps > 0 {
-            write!(line, " ({} gaps)", update.new_gaps).unwrap();
+            write!(line, " ({})", counted(update.new_gaps, "gap")).unwrap();
         }
         println!("{line}");
     }
