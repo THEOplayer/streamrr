@@ -142,7 +142,7 @@ struct SpeedWindow {
 impl SpeedWindow {
     fn new() -> Self {
         Self {
-            samples: VecDeque::new(),
+            samples: VecDeque::from([(Instant::now(), 0)]),
         }
     }
 
@@ -157,17 +157,17 @@ impl SpeedWindow {
         }
     }
 
-    fn bytes_per_second(&self) -> f64 {
+    fn bytes_per_second(&self) -> Option<f64> {
         if self.samples.len() < 2 {
-            return 0.0;
+            return None;
         }
         let (start_time, start) = self.samples.front().unwrap();
         let (end_time, end) = self.samples.back().unwrap();
-        let elapsed = end_time.duration_since(*start_time).as_secs_f64();
-        if elapsed <= 0.0 {
-            return 0.0;
+        let elapsed = end_time.duration_since(*start_time);
+        if elapsed < TICK {
+            return None;
         }
-        (end - start) as f64 / elapsed
+        Some((end - start) as f64 / elapsed.as_secs_f64())
     }
 }
 
@@ -390,7 +390,7 @@ fn redraw(
             shared.total_bytes as f64 / elapsed as f64
         }
     } else {
-        shared.speed.bytes_per_second()
+        shared.speed.bytes_per_second().unwrap_or(0.0)
     };
     let line = format!(
         "  {:02}:{:02} · {} segments · {} · {}/s",
@@ -478,11 +478,16 @@ fn row_text(
                 .filter(|dl| dl.state.load(Ordering::Relaxed) == 0)
                 .count();
             if active > 0 {
+                let speed = playlist
+                    .speed
+                    .bytes_per_second()
+                    .map(|speed| format!("{}/s", human_bytes(speed as u64)))
+                    .unwrap_or_else(|| "—".to_string());
                 format!(
-                    "{} {} · {}/s",
+                    "{} {} · {}",
                     Style::new().cyan().apply_to("⇣"),
                     active,
-                    human_bytes(playlist.speed.bytes_per_second() as u64),
+                    speed,
                 )
             } else {
                 Style::new().cyan().apply_to("⇣").to_string()
@@ -712,6 +717,42 @@ impl Drop for UiDownload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speed_window_requires_a_meaningful_interval() {
+        let mut speed = SpeedWindow::new();
+        let start = speed.samples[0].0;
+        assert_eq!(speed.bytes_per_second(), None);
+        speed.sample(start + TICK / 2, 512);
+        assert_eq!(speed.bytes_per_second(), None);
+        speed.sample(start + TICK, 1024);
+        assert_eq!(speed.bytes_per_second(), Some(10240.0));
+        speed.sample(start + SPEED_WINDOW + TICK * 2, 1024);
+        assert_eq!(speed.bytes_per_second(), None);
+        speed.sample(start + SPEED_WINDOW + TICK * 3, 1024);
+        assert_eq!(speed.bytes_per_second(), Some(0.0));
+    }
+
+    #[test]
+    fn playlist_speed_counts_inflight_bytes() {
+        let progress = TerminalProgress::new("Recording", "output".to_string());
+        progress.playlists(&[PlaylistInfo {
+            path: String::new(),
+            kind: PlaylistKind::Media,
+        }]);
+        let download = progress.download_started(0, "segment.ts", ResourceKind::Segment);
+        download.inc(1024);
+        {
+            let mut shared = progress.shared.lock().unwrap();
+            let playlist = &mut shared.playlists[0];
+            assert_eq!(playlist.done, 0);
+            assert_eq!(playlist.bytes, 1024);
+            let start = playlist.speed.samples[0].0;
+            let row = row_text(playlist, (5, 0), 100, start + TICK);
+            assert!(row.contains("⇣ 1 · 10.0 KiB/s"), "{row}");
+        }
+        progress.finish();
+    }
 
     #[test]
     fn truncate_middle_short() {
