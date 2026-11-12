@@ -18,7 +18,6 @@ const TICK: Duration = Duration::from_millis(100);
 const SPEED_WINDOW: Duration = Duration::from_secs(3);
 const BAR_WIDTH: usize = 20;
 const MAX_NAME_WIDTH: usize = 16;
-const MAX_LABEL_WIDTH: usize = 24;
 
 /// Truncate `s` in the middle with `…` so it fits `max_width`.
 /// Always keeps the start and the end of the string.
@@ -414,22 +413,20 @@ fn redraw(
 }
 
 fn row_columns((name_w, label_w): (usize, usize), width: usize) -> (usize, usize, usize) {
+    // Reserve the tail independently of changing counts, sizes and status text.
     const TAIL_WIDTH: usize = 36;
     let mut name_w = name_w.min(MAX_NAME_WIDTH);
-    let mut label_w = label_w.min(MAX_LABEL_WIDTH);
-    let min_label_w = label_w.min(8);
+    let mut label_w = label_w;
     let mut bar_w = BAR_WIDTH;
     let prefix_width =
         |name_w, label_w, bar_w| name_w + bar_w + 8 + if label_w > 0 { label_w + 2 } else { 0 };
     let available = width.saturating_sub(TAIL_WIDTH);
-    while prefix_width(name_w, label_w, bar_w) > available && label_w > 0 {
-        label_w -= 1;
-        if label_w < min_label_w {
-            label_w = 0;
-        }
-    }
+    // Shorten the bar first, then drop the whole label, then shorten the name.
     while prefix_width(name_w, label_w, bar_w) > available && bar_w > 10 {
         bar_w -= 1;
+    }
+    if prefix_width(name_w, label_w, bar_w) > available {
+        label_w = 0;
     }
     while prefix_width(name_w, label_w, bar_w) > available && name_w > 8 {
         name_w -= 1;
@@ -497,7 +494,7 @@ fn row_text(
     let (name_w, label_w, bar_w) = row_columns((name_w, label_w), width);
     let name = truncate_middle(&playlist.name, name_w);
     let label = if label_w > 0 {
-        format!("{:label_w$}  ", truncate_middle(&playlist.label, label_w))
+        format!("{:label_w$}  ", playlist.label)
     } else {
         String::new()
     };
@@ -934,12 +931,16 @@ mod tests {
     }
 
     #[test]
-    fn row_labels_are_complete_or_meaningfully_truncated() {
+    fn row_labels_are_whole_or_hidden() {
         assert_eq!(row_columns((8, 12), 60), (8, 0, 10));
         assert_eq!(row_columns((8, 12), 100), (8, 12, 20));
-        for width in 0..200 {
-            let (_, label, _) = row_columns((8, 12), width);
-            assert!(label == 0 || label >= 8);
+        assert_eq!(row_columns((8, 13), 80), (8, 13, 13));
+        assert_eq!(row_columns((8, 13), 75), (8, 0, 10));
+        for label_width in [1, 8, 13, 40, 200] {
+            for width in 0..250 {
+                let (_, label, _) = row_columns((8, label_width), width);
+                assert!(label == 0 || label == label_width);
+            }
         }
         assert_eq!(row_columns((8, 0), 100).1, 0);
     }
