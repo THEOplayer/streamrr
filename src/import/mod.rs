@@ -1,6 +1,8 @@
 pub(crate) mod har;
 
-use crate::record::{FsStorage, HarSource, RecordError, RecordOptions, Recorder, Source, Storage};
+use crate::record::{
+    FsStorage, HarSource, Progress, RecordError, RecordOptions, Recorder, Source, Storage,
+};
 use crate::shared::{BOM, StripBom};
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
@@ -71,6 +73,7 @@ pub async fn import_har_into<T: Storage>(
     url: Option<Url>,
     storage: T,
     options: RecordOptions,
+    progress: Progress,
     token: CancellationToken,
 ) -> Result<HarSource, RecordError> {
     // Create a source that reads from the HAR
@@ -89,9 +92,7 @@ pub async fn import_har_into<T: Storage>(
             (url, HarSource::new(har, time))
         }
     };
-    println!("Importing {url}");
-
-    let recorder = Recorder::new(source.clone(), storage, options);
+    let recorder = Recorder::new(source.clone(), storage, options).with_progress(progress);
     recorder.run(&url, token).await?;
     Ok(source)
 }
@@ -101,9 +102,10 @@ pub async fn import_har(
     url: Option<Url>,
     dest: &Path,
     options: RecordOptions,
+    progress: Progress,
     token: CancellationToken,
 ) -> Result<(), RecordError> {
     let storage = FsStorage::new(dest);
-    import_har_into(har, url, storage, options, token).await?;
+    import_har_into(har, url, storage, options, progress, token).await?;
     Ok(())
 }

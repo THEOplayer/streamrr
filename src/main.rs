@@ -1,6 +1,8 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::net::IpAddr;
+mod ui;
+
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -10,7 +12,7 @@ use tokio::spawn;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use streamrr::record::{RecordError, RecordOptions};
+use streamrr::record::{Progress, RecordError, RecordOptions};
 use streamrr::replay::ReplayError;
 use streamrr::shared::{MediaSelect, VariantSelect, VariantSelectOptions, abort_on_ctrlc};
 
@@ -156,13 +158,24 @@ async fn main() -> anyhow::Result<()> {
             let headers = headers.into_iter().collect::<HeaderMap>();
             let options = args.into_record_options(variant_select, headers);
             let token = CancellationToken::new();
+            let progress = ui::create("Recording", "Recorded", recording_path.clone());
             let record_task = {
                 let token = token.clone();
+                let task_progress: Progress = progress.clone();
                 spawn(async move {
-                    streamrr::record::record(&manifest_url, &recording_path, options, token).await
+                    streamrr::record::record(
+                        &manifest_url,
+                        &recording_path,
+                        options,
+                        task_progress,
+                        token,
+                    )
+                    .await
                 })
             };
-            match abort_on_ctrlc(record_task, token, RecordError::Cancelled).await {
+            let result = abort_on_ctrlc(record_task, token, RecordError::Cancelled).await;
+            progress.finish();
+            match result {
                 Ok(()) => {}
                 Err(RecordError::Cancelled) => println!("Stopped recording."),
                 Err(e) => {
@@ -212,13 +225,25 @@ async fn main() -> anyhow::Result<()> {
             let options = args.into_record_options(variant_select, HeaderMap::new());
             let token = CancellationToken::new();
             let har = load_har(&har_path)?;
+            let progress = ui::create("Importing", "Imported", recording_path.clone());
             let import_task = {
                 let token = token.clone();
+                let task_progress: Progress = progress.clone();
                 spawn(async move {
-                    streamrr::import::import_har(har, url, &recording_path, options, token).await
+                    streamrr::import::import_har(
+                        har,
+                        url,
+                        &recording_path,
+                        options,
+                        task_progress,
+                        token,
+                    )
+                    .await
                 })
             };
-            match abort_on_ctrlc(import_task, token, RecordError::Cancelled).await {
+            let result = abort_on_ctrlc(import_task, token, RecordError::Cancelled).await;
+            progress.finish();
+            match result {
                 Ok(()) => {}
                 Err(RecordError::Cancelled) => println!("Stopped importing."),
                 Err(e) => {

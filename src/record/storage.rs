@@ -1,4 +1,4 @@
-use crate::record::{RecordError, Source};
+use crate::record::{DownloadProgress, RecordError, Source, WithSize};
 use crate::shared::{ByteRange, Recording};
 use futures::TryStreamExt;
 use std::collections::HashMap;
@@ -30,6 +30,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
         source: &S,
         url: &Url,
         byte_range: Option<ByteRange>,
+        download: &dyn DownloadProgress,
         path: &str,
         token: CancellationToken,
     ) -> impl Future<Output = Result<(), RecordError>> + Send;
@@ -69,6 +70,7 @@ impl Storage for FsStorage {
         source: &S,
         url: &Url,
         byte_range: Option<ByteRange>,
+        download: &dyn DownloadProgress,
         path: &str,
         token: CancellationToken,
     ) -> Result<(), RecordError> {
@@ -83,16 +85,25 @@ impl Storage for FsStorage {
             .await
         {
             Ok(file) => file,
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                download.finish();
+                return Ok(());
+            }
             Err(err) => return Err(err.into()),
         };
-        let response_stream = token
+        let WithSize { size, contents } = token
             .run_until_cancelled(source.request_stream(url, byte_range))
             .await
-            .ok_or(RecordError::Cancelled)?
+            .ok_or(RecordError::Cancelled)?;
+        if let Some(size) = size {
+            download.set_size(size);
+        }
+        let contents = contents
+            .inspect_ok(|chunk| download.inc(chunk.len() as u64))
             .map_err(io::Error::other);
-        let mut response_stream = pin!(StreamReader::new(response_stream));
+        let mut response_stream = pin!(StreamReader::new(contents));
         tokio::io::copy_buf(&mut response_stream, &mut file).await?;
+        download.finish();
         Ok(())
     }
 
@@ -160,9 +171,11 @@ impl Storage for MemoryStorage {
         _source: &S,
         url: &Url,
         byte_range: Option<ByteRange>,
+        download: &dyn DownloadProgress,
         path: &str,
         _token: CancellationToken,
     ) -> Result<(), RecordError> {
+        download.finish();
         self.inner
             .lock()
             .unwrap()

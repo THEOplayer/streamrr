@@ -2,6 +2,8 @@
 
 Record HLS streams and replay them afterwards.
 
+[![streamrr recording a stream](assets/record.gif)](https://asciinema.org/a/wuFkMqKDWwa2ygKY)
+
 ## Installation
 
 ### Option 1: Install from pre-built release

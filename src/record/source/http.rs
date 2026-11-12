@@ -1,4 +1,4 @@
-use super::Source;
+use super::{Source, WithSize};
 use crate::shared::{ByteRange, Timed};
 use chrono::{DateTime, Utc};
 use futures::{Stream, TryStreamExt, future::ready, stream::once};
@@ -24,11 +24,6 @@ impl HttpSource {
             let end = start + byte_range.length - 1; // end byte for a range request is inclusive!
             format!("bytes={start}-{end}")
         });
-
-        println!(
-            "Download: {url} {}",
-            range_header.as_ref().unwrap_or(&String::new())
-        );
 
         let mut request = self.client.get(url.clone());
         if let Some(range) = range_header {
@@ -73,11 +68,13 @@ impl Source for HttpSource {
         &self,
         url: &Url,
         byte_range: Option<ByteRange>,
-    ) -> impl Stream<Item = Result<Bytes, Self::Error>> {
+    ) -> WithSize<impl Stream<Item = Result<Bytes, Self::Error>>> {
         let request = self.build_request(url, byte_range);
         let response = request.send().await;
-        once(ready(response))
+        let size = response.as_ref().ok().and_then(Response::content_length);
+        let contents = once(ready(response))
             .map_ok(Response::bytes_stream)
-            .try_flatten()
+            .try_flatten();
+        WithSize { size, contents }
     }
 }
