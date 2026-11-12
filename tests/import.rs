@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use insta::assert_snapshot;
-use relative_path::{RelativePath, RelativePathBuf};
+use relative_path::{PathExt, RelativePath};
 use reqwest::header::HeaderMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -204,8 +204,7 @@ async fn import_to_memory_matches_fs() {
         let mut resource_paths = HashSet::new();
         let mut recording_json = None;
         for file in files {
-            let relative =
-                RelativePathBuf::from_path(file.strip_prefix(dir.path()).unwrap()).unwrap();
+            let relative = file.relative_to(dir.path()).unwrap();
             let bytes = fs::read(&file).unwrap();
             if relative == "recording.json" {
                 recording_json = Some(bytes);
