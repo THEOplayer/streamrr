@@ -201,44 +201,48 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
         self.save_recording(playlist_time, master_name, master_name.to_string())
             .await?;
 
-        // Collect the recorded playlists in display order
-        let mut playlist_infos = Vec::new();
+        // Collect the playlists to record in display order
+        let mut playlists = Vec::new();
         for variant in &master_playlist.variants {
-            if variant
+            let Some(variant_url) = variant
                 .other_attributes
                 .as_ref()
                 .and_then(|attrs| attrs.get(ORIGINAL_URI))
-                .is_none()
-            {
+            else {
                 continue;
-            }
+            };
+            let variant_url = Url::parse(variant_url.as_str()).unwrap();
             let variant_dir = Path::new(&variant.uri)
                 .parent()
                 .unwrap()
                 .to_string_lossy()
                 .to_string();
-            playlist_infos.push(PlaylistInfo {
-                path: variant_dir,
-                kind: PlaylistKind::Variant {
-                    bandwidth: variant.bandwidth,
-                    resolution: variant
-                        .resolution
-                        .map(|resolution| (resolution.width, resolution.height)),
+            playlists.push((
+                variant_url,
+                variant_dir.clone(),
+                PlaylistInfo {
+                    path: variant_dir,
+                    kind: PlaylistKind::Variant {
+                        bandwidth: variant.bandwidth,
+                        resolution: variant
+                            .resolution
+                            .map(|resolution| (resolution.width, resolution.height)),
+                    },
                 },
-            });
+            ));
         }
         for media in &master_playlist.alternatives {
             let Some(media_uri) = &media.uri else {
                 continue;
             };
-            if media
+            let Some(media_url) = media
                 .other_attributes
                 .as_ref()
                 .and_then(|attrs| attrs.get(ORIGINAL_URI))
-                .is_none()
-            {
+            else {
                 continue;
-            }
+            };
+            let media_url = Url::parse(media_url.as_str()).unwrap();
             let media_dir = Path::new(media_uri)
                 .parent()
                 .unwrap()
@@ -251,66 +255,36 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
                 AlternativeMediaType::ClosedCaptions => MediaType::ClosedCaptions,
                 AlternativeMediaType::Other(_) => MediaType::Other,
             };
-            playlist_infos.push(PlaylistInfo {
-                path: media_dir,
-                kind: PlaylistKind::Rendition {
-                    media_type,
-                    name: media.name.clone(),
-                    language: media.language.clone(),
+            playlists.push((
+                media_url,
+                media_dir.clone(),
+                PlaylistInfo {
+                    path: media_dir,
+                    kind: PlaylistKind::Rendition {
+                        media_type,
+                        name: media.name.clone(),
+                        language: media.language.clone(),
+                    },
                 },
-            });
+            ));
         }
-        self.progress.playlists(&playlist_infos);
+        self.progress.playlists(
+            &playlists
+                .iter()
+                .map(|(_, _, info)| info.clone())
+                .collect::<Vec<_>>(),
+        );
 
         // Start recording selected variant streams and renditions
-        let mut playlist = 0;
         let mut join_set = JoinSet::new();
-        for variant in &master_playlist.variants {
-            let Some(other_attributes) = &variant.other_attributes else {
-                continue;
-            };
-            let Some(variant_url) = other_attributes.get(ORIGINAL_URI) else {
-                continue;
-            };
-            let variant_url = Url::parse(variant_url.as_str()).unwrap();
-            let variant_dir = Path::new(&variant.uri)
-                .parent()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
+        for (playlist, (playlist_url, playlist_dir, _)) in playlists.into_iter().enumerate() {
             let mut recorder = self.clone();
             let token = token.clone();
             join_set.spawn(async move {
                 recorder
-                    .record_media_playlist(&variant_url, &variant_dir, playlist, None, token)
+                    .record_media_playlist(&playlist_url, &playlist_dir, playlist, None, token)
                     .await
             });
-            playlist += 1;
-        }
-        for media in &master_playlist.alternatives {
-            let Some(media_uri) = &media.uri else {
-                continue;
-            };
-            let Some(other_attributes) = &media.other_attributes else {
-                continue;
-            };
-            let Some(media_url) = other_attributes.get(ORIGINAL_URI) else {
-                continue;
-            };
-            let media_url = Url::parse(media_url.as_str()).unwrap();
-            let media_dir = Path::new(media_uri)
-                .parent()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
-            let mut recorder = self.clone();
-            let token = token.clone();
-            join_set.spawn(async move {
-                recorder
-                    .record_media_playlist(&media_url, &media_dir, playlist, None, token)
-                    .await
-            });
-            playlist += 1;
         }
         // Wait for all tasks to complete
         while let Some(res) = join_set.join_next().await {
@@ -420,6 +394,7 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
         let mut rewriter = Rewriter::new(url, dir.as_ref(), self.options.keep_names);
         let name_in_recording = rewriter.playlist_path();
         let mut seen_segments = HashSet::new();
+        let handled = std::sync::Mutex::new(HashSet::new());
         let mut previous_playlist = None;
         let mut lowest_media_sequence = 0;
         let mut highest_media_sequence = None;
@@ -508,6 +483,7 @@ impl<S: Source + 'static, T: Storage> Recorder<S, T> {
                     storage: &self.storage,
                     progress: &self.progress,
                     playlist,
+                    handled: &handled,
                 },
                 &media_playlist.segments,
                 dir,
@@ -652,6 +628,31 @@ struct Downloads<'a, S: Source, T: Storage> {
     storage: &'a T,
     progress: &'a Progress,
     playlist: usize,
+    /// Resource paths already stored (or in flight) for this playlist,
+    /// deduplicated across refreshes.
+    handled: &'a std::sync::Mutex<HashSet<String>>,
+}
+
+/// Download and store a resource once, reporting it as a download.
+async fn store_resource<S: Source, T: Storage>(
+    downloads: &Downloads<'_, S, T>,
+    url: &Url,
+    byte_range: Option<ByteRange>,
+    path: String,
+    kind: ResourceKind,
+    token: CancellationToken,
+) -> Result<(), RecordError> {
+    if !downloads.handled.lock().unwrap().insert(path.clone()) {
+        // Already stored (or being stored) for this playlist.
+        return Ok(());
+    }
+    let download = downloads
+        .progress
+        .download_started(downloads.playlist, &path, kind);
+    downloads
+        .storage
+        .store_resource(downloads.source, url, byte_range, &*download, &path, token)
+        .await
 }
 
 async fn download_segments<S: Source, T: Storage>(
@@ -721,21 +722,15 @@ async fn download_segment<S: Source, T: Storage>(
             RecordError::Parse(anyhow!("Invalid byte range in #X-ORIGINAL-BYTE-RANGE: {e}"))
         })?;
     let path = join_path(Path::new(dir), &media_segment.uri);
-    let download =
-        downloads
-            .progress
-            .download_started(downloads.playlist, &path, ResourceKind::Segment);
-    downloads
-        .storage
-        .store_resource(
-            downloads.source,
-            &segment_url,
-            segment_byte_range,
-            &*download,
-            &path,
-            token,
-        )
-        .await
+    store_resource(
+        downloads,
+        &segment_url,
+        segment_byte_range,
+        path,
+        ResourceKind::Segment,
+        token,
+    )
+    .await
 }
 
 async fn download_key<S: Source, T: Storage>(
@@ -762,14 +757,7 @@ async fn download_key<S: Source, T: Storage>(
     }
     let key_file = key.uri.as_ref().unwrap();
     let path = join_path(Path::new(dir), key_file.as_str());
-    let download =
-        downloads
-            .progress
-            .download_started(downloads.playlist, &path, ResourceKind::Key);
-    downloads
-        .storage
-        .store_resource(downloads.source, &key_url, None, &*download, &path, token)
-        .await
+    store_resource(downloads, &key_url, None, path, ResourceKind::Key, token).await
 }
 
 async fn download_map<S: Source, T: Storage>(
@@ -807,21 +795,15 @@ async fn download_map<S: Source, T: Storage>(
         return Ok(());
     }
     let path = join_path(Path::new(dir), &map.uri);
-    let download =
-        downloads
-            .progress
-            .download_started(downloads.playlist, &path, ResourceKind::InitSegment);
-    downloads
-        .storage
-        .store_resource(
-            downloads.source,
-            &map_url,
-            map_byte_range,
-            &*download,
-            &path,
-            token,
-        )
-        .await
+    store_resource(
+        downloads,
+        &map_url,
+        map_byte_range,
+        path,
+        ResourceKind::InitSegment,
+        token,
+    )
+    .await
 }
 
 fn media_applies_to_variant(media: &AlternativeMedia, variant_stream: &VariantStream) -> bool {
@@ -856,11 +838,13 @@ mod tests {
         fn require_send<T: Send>(_t: T) {}
         let progress: Progress = Arc::new(NoProgress);
         require_send(download_playlist(&source, &url));
+        let handled = std::sync::Mutex::new(HashSet::new());
         let downloads = Downloads {
             source: &source,
             storage: &storage,
             progress: &progress,
             playlist: 0,
+            handled: &handled,
         };
         require_send(download_segments(&downloads, &[], "", 0, token.clone()));
         require_send(download_segment(

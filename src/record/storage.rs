@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::sync::Arc;
 use tokio::fs;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio_util::bytes::Bytes;
 use tokio_util::io::StreamReader;
@@ -98,16 +98,11 @@ impl Storage for FsStorage {
         if let Some(size) = size {
             download.set_size(size);
         }
-        let mut response_stream = pin!(StreamReader::new(contents.map_err(io::Error::other)));
-        let mut buffer = vec![0; 16 * 1024];
-        loop {
-            let read = response_stream.read(&mut buffer).await?;
-            if read == 0 {
-                break;
-            }
-            file.write_all(&buffer[..read]).await?;
-            download.inc(read as u64);
-        }
+        let contents = contents
+            .inspect_ok(|chunk| download.inc(chunk.len() as u64))
+            .map_err(io::Error::other);
+        let mut response_stream = pin!(StreamReader::new(contents));
+        tokio::io::copy_buf(&mut response_stream, &mut file).await?;
         download.finish();
         Ok(())
     }

@@ -78,6 +78,7 @@ impl RecordProgress for NoProgress {}
 impl DownloadProgress for NoProgress {}
 
 /// A recorded playlist's display information.
+#[derive(Clone)]
 pub struct PlaylistInfo {
     /// The recording-relative directory ("" for a single media playlist).
     pub path: String,
@@ -85,6 +86,7 @@ pub struct PlaylistInfo {
 }
 
 /// What kind of playlist is being recorded.
+#[derive(Clone)]
 pub enum PlaylistKind {
     /// A variant stream.
     Variant {
@@ -102,6 +104,7 @@ pub enum PlaylistKind {
 }
 
 /// The type of an alternate rendition.
+#[derive(Clone)]
 pub enum MediaType {
     Audio,
     Video,

@@ -7,8 +7,10 @@ use reqwest::header::HeaderMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use streamrr::import::{Har, import_har};
-
-use streamrr::record::{NoProgress, RecordError, RecordOptions};
+use streamrr::record::{
+    DownloadProgress, NoProgress, PlaylistInfo, PlaylistKind, PlaylistUpdate, RecordError,
+    RecordOptions, RecordProgress, ResourceKind,
+};
 use streamrr::shared::{MediaSelect, VariantSelect, VariantSelectOptions};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -304,35 +306,37 @@ struct MockProgress {
 }
 
 struct DownloadRecord {
+    path: String,
+    kind: ResourceKind,
     size: std::sync::atomic::AtomicU64,
     got: std::sync::atomic::AtomicU64,
     finished: std::sync::atomic::AtomicBool,
 }
 
-impl streamrr::record::RecordProgress for MockProgress {
+impl RecordProgress for MockProgress {
     fn started(&self, url: &Url) {
         self.started.lock().unwrap().push(url.to_string());
     }
     fn skipped(&self, url: &Url) {
         self.skipped.lock().unwrap().push(url.to_string());
     }
-    fn playlists(&self, playlists: &[streamrr::record::PlaylistInfo]) {
+    fn playlists(&self, playlists: &[PlaylistInfo]) {
         let mut out = self.playlists.lock().unwrap();
         for info in playlists {
             let kind = match &info.kind {
-                streamrr::record::PlaylistKind::Variant {
+                PlaylistKind::Variant {
                     bandwidth,
                     resolution,
                 } => format!("variant {bandwidth} {resolution:?}"),
-                streamrr::record::PlaylistKind::Rendition { name, .. } => {
+                PlaylistKind::Rendition { name, .. } => {
                     format!("rendition {name}")
                 }
-                streamrr::record::PlaylistKind::Media => "media".to_string(),
+                PlaylistKind::Media => "media".to_string(),
             };
             out.push((info.path.clone(), kind));
         }
     }
-    fn playlist_loaded(&self, playlist: usize, update: &streamrr::record::PlaylistUpdate) {
+    fn playlist_loaded(&self, playlist: usize, update: &PlaylistUpdate) {
         self.loaded
             .lock()
             .unwrap()
@@ -344,10 +348,12 @@ impl streamrr::record::RecordProgress for MockProgress {
     fn download_started(
         &self,
         _playlist: usize,
-        _path: &str,
-        _kind: streamrr::record::ResourceKind,
-    ) -> Box<dyn streamrr::record::DownloadProgress> {
+        path: &str,
+        kind: ResourceKind,
+    ) -> Box<dyn DownloadProgress> {
         let record = Arc::new(DownloadRecord {
+            path: path.to_string(),
+            kind,
             size: 0.into(),
             got: 0.into(),
             finished: false.into(),
@@ -361,7 +367,7 @@ struct MockDownload {
     record: Arc<DownloadRecord>,
 }
 
-impl streamrr::record::DownloadProgress for MockDownload {
+impl DownloadProgress for MockDownload {
     fn set_size(&self, size: u64) {
         self.record.size.store(size, Ordering::Relaxed);
     }
@@ -375,7 +381,6 @@ impl streamrr::record::DownloadProgress for MockDownload {
 
 #[tokio::test]
 async fn import_reports_progress() {
-    use std::sync::atomic::Ordering;
     let progress = Arc::new(MockProgress::default());
     let dir = TempDir::new().unwrap();
     import_har(
@@ -440,7 +445,6 @@ async fn import_reports_progress() {
 
 #[tokio::test]
 async fn import_live_reports_progress() {
-    use std::sync::atomic::Ordering;
     let progress = Arc::new(MockProgress::default());
     let dir = TempDir::new().unwrap();
     import_har(
@@ -466,14 +470,21 @@ async fn import_live_reports_progress() {
     // New segments and gaps add up to the distinct segments seen.
     assert_eq!(loaded.iter().map(|l| l.1).sum::<usize>(), 2);
     assert_eq!(loaded.iter().map(|l| l.2).sum::<usize>(), 2);
+    let new_segments: usize = loaded.iter().map(|l| l.1).sum();
     drop(loaded);
     assert_eq!(*progress.ended.lock().unwrap(), vec![0]);
-    assert!(
-        progress
-            .downloads
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|d| d.finished.load(Ordering::Relaxed))
-    );
+    // Each resource path is downloaded at most once, and every
+    // segment download finished.
+    let downloads = progress.downloads.lock().unwrap();
+    let paths: HashSet<_> = downloads.iter().map(|d| d.path.as_str()).collect();
+    assert_eq!(paths.len(), downloads.len());
+    let finished_segments = downloads
+        .iter()
+        .filter(|d| matches!(d.kind, ResourceKind::Segment))
+        .inspect(|d| {
+            assert!(d.finished.load(Ordering::Relaxed));
+        })
+        .count();
+    assert_eq!(finished_segments, new_segments);
+    assert!(downloads.iter().all(|d| d.finished.load(Ordering::Relaxed)));
 }
