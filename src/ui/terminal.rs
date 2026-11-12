@@ -413,6 +413,31 @@ fn redraw(
     }
 }
 
+fn row_columns((name_w, label_w): (usize, usize), width: usize) -> (usize, usize, usize) {
+    const TAIL_WIDTH: usize = 34;
+    let mut name_w = name_w.min(MAX_NAME_WIDTH);
+    let mut label_w = label_w.min(MAX_LABEL_WIDTH);
+    let min_label_w = label_w.min(8);
+    let mut bar_w = BAR_WIDTH;
+    let prefix_width = |name_w, label_w, bar_w| {
+        name_w + bar_w + 8 + if label_w > 0 { label_w + 2 } else { 0 }
+    };
+    let available = width.saturating_sub(TAIL_WIDTH);
+    while prefix_width(name_w, label_w, bar_w) > available && label_w > 0 {
+        label_w -= 1;
+        if label_w < min_label_w {
+            label_w = 0;
+        }
+    }
+    while prefix_width(name_w, label_w, bar_w) > available && bar_w > 10 {
+        bar_w -= 1;
+    }
+    while prefix_width(name_w, label_w, bar_w) > available && name_w > 8 {
+        name_w -= 1;
+    }
+    (name_w, label_w, bar_w)
+}
+
 fn row_text(
     playlist: &mut PlaylistState,
     (name_w, label_w): (usize, usize),
@@ -428,14 +453,6 @@ fn row_text(
             Style::new()
                 .yellow()
                 .apply_to(format!("({} gaps)", playlist.gaps))
-        )
-    } else {
-        format!("{}/{}", playlist.done, playlist.total)
-    };
-    let counts_plain = if playlist.gaps > 0 {
-        format!(
-            "{}/{} ({} gaps)",
-            playlist.done, playlist.total, playlist.gaps
         )
     } else {
         format!("{}/{}", playlist.done, playlist.total)
@@ -473,41 +490,16 @@ fn row_text(
         }
     };
     let size = human_bytes(playlist.bytes);
-    let mut name_w = name_w.min(MAX_NAME_WIDTH);
-    let mut label_w = label_w.min(MAX_LABEL_WIDTH);
-    let mut bar_w = BAR_WIDTH;
-    let build = |name_w: usize, label_w: usize, bar_w: usize| {
-        let name = truncate_middle(&playlist.name, name_w);
-        let label = truncate_middle(&playlist.label, label_w);
-        let bar = render_bar(playlist.fraction(), bar_w);
-        format!("  {name:<name_w$}  {label:<label_w$}  [{bar}]  {counts}  {size}  {status}")
-    };
-    let mut line = build(name_w, label_w, bar_w);
-    // Shrink the label column first, then the bar, then the name.
-    while measure_text_width(&line) > width && label_w > 0 {
-        label_w -= 1;
-        line = build(name_w, label_w, bar_w);
-    }
-    while measure_text_width(&line) > width && bar_w > 10 {
-        bar_w -= 1;
-        line = build(name_w, label_w, bar_w);
-    }
-    while measure_text_width(&line) > width && name_w > 8 {
-        name_w -= 1;
-        line = build(name_w, label_w, bar_w);
-    }
-    // Last resort: truncate the end of the line (ANSI-aware).
-    if measure_text_width(&line) > width {
-        let plain = format!(
-            "  {name:<name_w$}  {label:<label_w$}  [{bar}]  {counts_plain}  {size}  {status}",
-            name = truncate_middle(&playlist.name, name_w),
-            label = truncate_middle(&playlist.label, label_w),
-            bar = render_bar(playlist.fraction(), bar_w),
-        );
-        console::truncate_str(&plain, width, "…").to_string()
+    let (name_w, label_w, bar_w) = row_columns((name_w, label_w), width);
+    let name = truncate_middle(&playlist.name, name_w);
+    let label = if label_w > 0 {
+        format!("{:label_w$}  ", truncate_middle(&playlist.label, label_w))
     } else {
-        line
-    }
+        String::new()
+    };
+    let bar = render_bar(playlist.fraction(), bar_w);
+    let line = format!("  {name:<name_w$}  {label}[{bar}]  {counts} {size} {status}");
+    console::truncate_str(&line, width, "…").to_string()
 }
 
 fn detail_text(playlist: &PlaylistState, width: usize) -> String {
@@ -873,6 +865,18 @@ mod tests {
                 measure_text_width(&row) <= width,
                 "row wider than {width}: {row}"
             );
+            if width >= 60 {
+                let bar_start = row.find('[').unwrap();
+                let bar_end = row.find(']').unwrap();
+                for status in [Status::Waiting(Utc::now()), Status::Done, Status::Stopped] {
+                    playlist.status = status;
+                    playlist.done = playlist.total;
+                    playlist.bytes *= 2;
+                    let final_row = row_text(&mut playlist, (32, 40), width, Instant::now());
+                    assert_eq!(final_row.find('['), Some(bar_start));
+                    assert_eq!(final_row.find(']'), Some(bar_end));
+                }
+            }
             let detail = detail_text(&playlist, width);
             assert!(detail.starts_with("    "));
             assert!(
@@ -887,5 +891,16 @@ mod tests {
             playlist.downloads.clear();
             assert!(detail_text(&playlist, width).is_empty());
         }
+    }
+
+    #[test]
+    fn row_labels_are_complete_or_meaningfully_truncated() {
+        assert_eq!(row_columns((8, 12), 60), (8, 0, 10));
+        assert_eq!(row_columns((8, 12), 100), (8, 12, 20));
+        for width in 0..200 {
+            let (_, label, _) = row_columns((8, 12), width);
+            assert!(label == 0 || label >= 8);
+        }
+        assert_eq!(row_columns((8, 0), 100).1, 0);
     }
 }
