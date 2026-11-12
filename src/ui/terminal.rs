@@ -357,8 +357,8 @@ fn redraw(
     } else {
         Style::new().green().apply_to("●").to_string()
     };
-    let fixed = measure_text_width(verb) + measure_text_width(dest) + 5;
-    let title = if fixed <= width {
+    let fixed = measure_text_width(verb) + measure_text_width(dest) + 6;
+    let title = if fixed <= width && width - fixed >= 8 {
         format!(
             "{} {} → {}",
             bullet,
