@@ -1,4 +1,5 @@
 use crate::ui::{CliProgress, counted, display_name, human_bytes};
+use relative_path::{RelativePath, RelativePathBuf};
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -95,12 +96,12 @@ impl RecordProgress for LogProgress {
     fn download_started(
         &self,
         playlist: usize,
-        path: &str,
+        path: &RelativePath,
         _kind: ResourceKind,
     ) -> Box<dyn DownloadProgress> {
         Box::new(LogDownload {
             name: self.name(playlist),
-            path: path.to_string(),
+            path: path.to_owned(),
             size: AtomicU64::new(u64::MAX),
             got: AtomicU64::new(0),
             bytes: self.bytes.clone(),
@@ -110,7 +111,7 @@ impl RecordProgress for LogProgress {
 
 struct LogDownload {
     name: String,
-    path: String,
+    path: RelativePathBuf,
     size: AtomicU64,
     got: AtomicU64,
     bytes: std::sync::Arc<AtomicU64>,

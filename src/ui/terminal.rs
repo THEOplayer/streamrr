@@ -2,6 +2,7 @@ use crate::ui::{CliProgress, counted, display_name, human_bytes};
 use chrono::{DateTime, Utc};
 use console::{Style, Term, measure_text_width};
 use indicatif::{MultiProgress, ProgressBar};
+use relative_path::RelativePath;
 use std::collections::VecDeque;
 use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
@@ -642,10 +643,10 @@ impl RecordProgress for TerminalProgress {
     fn download_started(
         &self,
         playlist: usize,
-        path: &str,
+        path: &RelativePath,
         kind: ResourceKind,
     ) -> Box<dyn DownloadProgress> {
-        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+        let name = path.file_name().unwrap_or(path.as_str()).to_string();
         let record = Arc::new(ActiveDownload {
             name,
             size: AtomicU64::new(u64::MAX),
@@ -713,6 +714,7 @@ impl Drop for UiDownload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use relative_path::RelativePathBuf;
 
     #[test]
     fn speed_window_requires_a_meaningful_interval() {
@@ -733,10 +735,11 @@ mod tests {
     fn playlist_speed_counts_inflight_bytes() {
         let progress = TerminalProgress::new("Recording", "output".to_string());
         progress.playlists(&[PlaylistInfo {
-            path: String::new(),
+            path: RelativePathBuf::new(),
             kind: PlaylistKind::Media,
         }]);
-        let download = progress.download_started(0, "segment.ts", ResourceKind::Segment);
+        let download =
+            progress.download_started(0, RelativePath::new("segment.ts"), ResourceKind::Segment);
         download.inc(1024);
         {
             let mut shared = progress.shared.lock().unwrap();
@@ -836,7 +839,7 @@ mod tests {
     fn playlist_refresh_resumes_download_status() {
         let progress = TerminalProgress::new("Recording", "output".to_string());
         progress.playlists(&[PlaylistInfo {
-            path: String::new(),
+            path: RelativePathBuf::new(),
             kind: PlaylistKind::Media,
         }]);
         let update = PlaylistUpdate {

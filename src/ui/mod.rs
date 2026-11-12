@@ -4,6 +4,7 @@ mod terminal;
 pub use log::LogProgress;
 pub use terminal::TerminalProgress;
 
+use relative_path::RelativePath;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -49,8 +50,8 @@ pub fn create(
 
 /// The display name for a playlist: its recording-relative directory,
 /// or "media" for a single media playlist (path "").
-pub(crate) fn display_name(path: &str) -> String {
-    if path.is_empty() {
+pub(crate) fn display_name(path: &RelativePath) -> String {
+    if path.as_str().is_empty() {
         "media".to_string()
     } else {
         path.to_string()

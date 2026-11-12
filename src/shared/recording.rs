@@ -4,12 +4,13 @@ use chrono::{DateTime, TimeZone, Utc};
 use clap::ValueEnum;
 use indexmap::IndexMap;
 use m3u8_rs::{AlternativeMedia, VariantStream};
+use relative_path::{RelativePath, RelativePathBuf};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Default, Clone)]
 pub struct Recording {
     // Playlist file path is keyed by playlist name, then by UTC time
-    playlists: IndexMap<String, BTreeMap<DateTime<Utc>, String>>,
+    playlists: IndexMap<RelativePathBuf, BTreeMap<DateTime<Utc>, RelativePathBuf>>,
 }
 
 impl Recording {
@@ -17,11 +18,16 @@ impl Recording {
         Self::default()
     }
 
-    pub fn add(&mut self, time: DateTime<Utc>, playlist_name: &str, playlist_path: String) {
+    pub fn add(
+        &mut self,
+        time: DateTime<Utc>,
+        playlist_name: &RelativePath,
+        playlist_path: RelativePathBuf,
+    ) {
         let playlists = if let Some(playlists) = self.playlists.get_mut(playlist_name) {
             playlists
         } else {
-            self.playlists.entry(playlist_name.to_string()).or_default()
+            self.playlists.entry(playlist_name.to_owned()).or_default()
         };
         playlists.insert(time, playlist_path);
     }
@@ -35,16 +41,19 @@ impl Recording {
         Some(time)
     }
 
-    pub fn earliest_time_for(&self, playlist_name: &str) -> Option<(&DateTime<Utc>, &str)> {
+    pub fn earliest_time_for(
+        &self,
+        playlist_name: &RelativePath,
+    ) -> Option<(&DateTime<Utc>, &RelativePath)> {
         let (time, path) = self.playlists.get(playlist_name)?.first_key_value()?;
         Some((time, path))
     }
 
     pub fn find_latest_before(
         &self,
-        playlist_name: &str,
+        playlist_name: &RelativePath,
         time: DateTime<Utc>,
-    ) -> Option<(&DateTime<Utc>, &str)> {
+    ) -> Option<(&DateTime<Utc>, &RelativePath)> {
         let (time, path) = self
             .playlists
             .get(playlist_name)?
@@ -213,10 +222,10 @@ impl Serialize for Recording {
                         .iter()
                         .map(|(time, path)| SerializedPlaylist {
                             time: time.timestamp_millis(),
-                            path: path.clone(),
+                            path: path.to_string(),
                         })
                         .collect::<Vec<SerializedPlaylist>>();
-                    (name.clone(), playlists)
+                    (name.to_string(), playlists)
                 })
                 .collect(),
         };
@@ -241,12 +250,12 @@ impl<'de> Deserialize<'de> for Recording {
                             (
                                 Utc.timestamp_millis_opt(time).unwrap(),
                                 // Recordings made on Windows used `\` separators.
-                                path.replace('\\', "/"),
+                                RelativePathBuf::from(path.replace('\\', "/")),
                             )
                         })
                         .collect();
                     // Recordings made on Windows used `\` separators.
-                    (name.replace('\\', "/"), playlists)
+                    (RelativePathBuf::from(name.replace('\\', "/")), playlists)
                 })
                 .collect(),
         })
@@ -265,13 +274,13 @@ mod tests {
         let recording: Recording = serde_json::from_str(json).unwrap();
         let time = Utc.timestamp_millis_opt(1767268800600).unwrap();
         assert_eq!(
-            recording.earliest_time_for("variant0/index.m3u8"),
-            Some((&time, "variant0/index.m3u8"))
+            recording.earliest_time_for(RelativePath::new("variant0/index.m3u8")),
+            Some((&time, RelativePath::new("variant0/index.m3u8")))
         );
         let later = Utc.timestamp_millis_opt(1767268801000).unwrap();
         assert_eq!(
-            recording.find_latest_before("variant0/index.m3u8", later),
-            Some((&time, "variant0/index.m3u8"))
+            recording.find_latest_before(RelativePath::new("variant0/index.m3u8"), later),
+            Some((&time, RelativePath::new("variant0/index.m3u8")))
         );
     }
 }

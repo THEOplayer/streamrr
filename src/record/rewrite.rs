@@ -1,10 +1,10 @@
-use crate::shared::{ByteRange, hex, join_path, url_file_extension, url_file_name};
+use crate::shared::{ByteRange, hex, url_file_extension, url_file_name};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use m3u8_rs::*;
+use relative_path::{RelativePath, RelativePathBuf};
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
-use std::path::Path;
 use url::Url;
 
 pub const ORIGINAL_URI: &str = "X-ORIGINAL-URI";
@@ -28,13 +28,13 @@ pub enum RewriteError {
 #[derive(Debug)]
 pub struct Rewriter<'a> {
     playlist_url: &'a Url,
-    dest: &'a Path,
+    dest: &'a RelativePath,
     keep_names: bool,
     last_segment_ext: String,
 }
 
 impl<'a> Rewriter<'a> {
-    pub fn new(playlist_url: &'a Url, dest: &'a Path, keep_names: bool) -> Self {
+    pub fn new(playlist_url: &'a Url, dest: &'a RelativePath, keep_names: bool) -> Self {
         Self {
             playlist_url,
             dest,
@@ -57,18 +57,18 @@ impl<'a> Rewriter<'a> {
         self.build_playlist_name(self.playlist_url)
     }
 
-    pub fn playlist_path(&self) -> String {
-        join_path(self.dest, self.playlist_name())
+    pub fn playlist_path(&self) -> RelativePathBuf {
+        self.dest.join(self.playlist_name())
     }
 
-    pub fn playlist_path_with_timestamp(&self, timestamp: &DateTime<Utc>) -> String {
+    pub fn playlist_path_with_timestamp(&self, timestamp: &DateTime<Utc>) -> RelativePathBuf {
         let file_name = self.playlist_name();
         let file_name_with_timestamp = format!(
             "{}-{}.m3u8",
             file_name.strip_suffix(".m3u8").unwrap_or(file_name),
             timestamp.format("%Y%m%dT%H%M%S%.3f")
         );
-        join_path(self.dest, &file_name_with_timestamp)
+        self.dest.join(file_name_with_timestamp)
     }
 
     pub fn rewrite_master_playlist(
@@ -339,14 +339,14 @@ mod tests {
             .unwrap()
             .to_utc();
 
-        let rewriter = Rewriter::new(&url, Path::new("variant0"), false);
+        let rewriter = Rewriter::new(&url, RelativePath::new("variant0"), false);
         assert_eq!(rewriter.playlist_path(), "variant0/index.m3u8");
         assert_eq!(
             rewriter.playlist_path_with_timestamp(&timestamp),
             "variant0/index-20260101T120000.000.m3u8"
         );
 
-        let rewriter = Rewriter::new(&url, Path::new(""), false);
+        let rewriter = Rewriter::new(&url, RelativePath::new(""), false);
         assert_eq!(rewriter.playlist_path(), "index.m3u8");
         assert_eq!(
             rewriter.playlist_path_with_timestamp(&timestamp),

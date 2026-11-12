@@ -1,14 +1,14 @@
-use std::path::Path;
+use relative_path::RelativePath;
 use url::{Position, Url};
 
 pub(crate) fn url_file_name(url: &Url) -> Option<&str> {
     let last_path_segment = url.path_segments()?.next_back()?;
-    Path::new(last_path_segment).file_name()?.to_str()
+    RelativePath::new(last_path_segment).file_name()
 }
 
 pub(crate) fn url_file_extension(url: &Url) -> Option<&str> {
     let last_path_segment = url.path_segments()?.next_back()?;
-    Path::new(last_path_segment).extension()?.to_str()
+    RelativePath::new(last_path_segment).extension()
 }
 
 /// A URL string without fragment, for comparing HAR request URLs.
