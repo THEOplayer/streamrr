@@ -76,22 +76,24 @@ impl Storage for FsStorage {
         token: CancellationToken,
     ) -> Result<(), RecordError> {
         let path = path.to_path(&self.dest);
+        if fs::try_exists(&path).await? {
+            download.finish();
+            return Ok(());
+        }
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        let mut file = match fs::OpenOptions::new()
+        let mut part_path = path.as_os_str().to_os_string();
+        part_path.push(".part");
+        // Removes the partial file on failure or cancellation. Declared before `file`,
+        // so the file is closed before it gets removed (required on Windows).
+        let temp_path = tempfile::TempPath::try_from_path(PathBuf::from(part_path))?;
+        let mut file = fs::OpenOptions::new()
             .write(true)
-            .create_new(true)
-            .open(&path)
-            .await
-        {
-            Ok(file) => file,
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                download.finish();
-                return Ok(());
-            }
-            Err(err) => return Err(err.into()),
-        };
+            .create(true)
+            .truncate(true)
+            .open(&temp_path)
+            .await?;
         let WithSize { size, contents } = token
             .run_until_cancelled(source.request_stream(url, byte_range))
             .await
@@ -104,6 +106,14 @@ impl Storage for FsStorage {
             .map_err(io::Error::other);
         let mut response_stream = pin!(StreamReader::new(contents));
         tokio::io::copy_buf(&mut response_stream, &mut file).await?;
+        file.flush().await?;
+        file.sync_all().await?;
+        drop(file);
+        match temp_path.persist_noclobber(&path) {
+            Ok(()) => {}
+            Err(err) if err.error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err.error.into()),
+        }
         download.finish();
         Ok(())
     }
@@ -192,5 +202,209 @@ impl Storage for MemoryStorage {
     async fn save_recording(&self, recording: &Recording) -> io::Result<()> {
         self.inner.lock().unwrap().recording = recording.clone();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::record::NoProgress;
+    use crate::shared::Timed;
+    use chrono::{DateTime, Utc};
+    use futures::{Stream, stream};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    #[derive(Clone)]
+    struct FakeSource {
+        chunks: Vec<&'static [u8]>,
+        fail: bool,
+        requests: Arc<AtomicUsize>,
+    }
+
+    impl FakeSource {
+        fn new(chunks: Vec<&'static [u8]>, fail: bool) -> Self {
+            Self {
+                chunks,
+                fail,
+                requests: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    impl Source for FakeSource {
+        type Error = io::Error;
+
+        async fn wait_for_refresh(&mut self, _: DateTime<Utc>, _: Duration) {}
+
+        async fn request_playlist(&self, _: &Url) -> io::Result<Option<Timed<String>>> {
+            unreachable!()
+        }
+
+        async fn request(&self, _: &Url, _: Option<ByteRange>) -> io::Result<Timed<Bytes>> {
+            unreachable!()
+        }
+
+        async fn request_stream(
+            &self,
+            _: &Url,
+            _: Option<ByteRange>,
+        ) -> WithSize<impl Stream<Item = io::Result<Bytes>> + Send> {
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            let mut chunks: Vec<_> = self
+                .chunks
+                .iter()
+                .map(|chunk| Ok(Bytes::from_static(chunk)))
+                .collect();
+            if self.fail {
+                chunks.push(Err(io::Error::other("download failed")));
+            }
+            WithSize {
+                size: None,
+                contents: stream::iter(chunks),
+            }
+        }
+    }
+
+    /// Store a fake resource at a fixed recording-relative path.
+    async fn store(storage: &FsStorage, source: &FakeSource) -> Result<(), RecordError> {
+        storage
+            .store_resource(
+                source,
+                &Url::parse("https://example.com/segment.ts").unwrap(),
+                None,
+                &NoProgress,
+                RelativePath::new("segment.ts"),
+                CancellationToken::new(),
+            )
+            .await
+    }
+
+    /// Check that a failed download left no files behind.
+    async fn assert_no_files(dest: &Path) {
+        assert!(!fs::try_exists(dest.join("segment.ts")).await.unwrap());
+        assert!(!fs::try_exists(dest.join("segment.ts.part")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn successful_store() {
+        let dest = tempfile::tempdir().unwrap();
+        let storage = FsStorage::new(dest.path());
+        store(&storage, &FakeSource::new(vec![b"hello", b" world"], false))
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read(dest.path().join("segment.ts")).await.unwrap(),
+            b"hello world"
+        );
+        assert!(
+            !fs::try_exists(dest.path().join("segment.ts.part"))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_request_can_be_retried() {
+        let dest = tempfile::tempdir().unwrap();
+        let storage = FsStorage::new(dest.path());
+        assert!(
+            store(&storage, &FakeSource::new(vec![], true))
+                .await
+                .is_err()
+        );
+        assert_no_files(dest.path()).await;
+        store(&storage, &FakeSource::new(vec![b"retry"], false))
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read(dest.path().join("segment.ts")).await.unwrap(),
+            b"retry"
+        );
+        assert!(
+            !fs::try_exists(dest.path().join("segment.ts.part"))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_stream_removes_partial_file() {
+        let dest = tempfile::tempdir().unwrap();
+        let storage = FsStorage::new(dest.path());
+        assert!(
+            store(&storage, &FakeSource::new(vec![b"partial"], true))
+                .await
+                .is_err()
+        );
+        assert_no_files(dest.path()).await;
+    }
+
+    #[tokio::test]
+    async fn existing_file_is_not_requested() {
+        let dest = tempfile::tempdir().unwrap();
+        fs::write(dest.path().join("segment.ts"), b"original")
+            .await
+            .unwrap();
+        let source = FakeSource::new(vec![], true);
+        store(&FsStorage::new(dest.path()), &source).await.unwrap();
+        assert_eq!(source.requests.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fs::read(dest.path().join("segment.ts")).await.unwrap(),
+            b"original"
+        );
+        assert!(
+            !fs::try_exists(dest.path().join("segment.ts.part"))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_partial_file_is_overwritten() {
+        let dest = tempfile::tempdir().unwrap();
+        fs::write(
+            dest.path().join("segment.ts.part"),
+            b"stale partial contents",
+        )
+        .await
+        .unwrap();
+        store(
+            &FsStorage::new(dest.path()),
+            &FakeSource::new(vec![b"new"], false),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            fs::read(dest.path().join("segment.ts")).await.unwrap(),
+            b"new"
+        );
+        assert!(
+            !fs::try_exists(dest.path().join("segment.ts.part"))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_resource_is_stored() {
+        let dest = tempfile::tempdir().unwrap();
+        store(
+            &FsStorage::new(dest.path()),
+            &FakeSource::new(vec![], false),
+        )
+        .await
+        .unwrap();
+        assert!(
+            fs::read(dest.path().join("segment.ts"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !fs::try_exists(dest.path().join("segment.ts.part"))
+                .await
+                .unwrap()
+        );
     }
 }

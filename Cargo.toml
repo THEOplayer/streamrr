@@ -32,10 +32,10 @@ mime_guess = "2.0.5"
 indicatif = "0.18.6"
 console = "0.16.6"
 relative-path = "2.0.3"
+tempfile = "3.14.0"
 
 [dev-dependencies]
 insta = "1.46.3"
-tempfile = "3.14.0"
 warp = { version = "0.4.2", features = ["test"] }
 
 # Enable 'dist' even though publish = false
