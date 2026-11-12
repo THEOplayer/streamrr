@@ -357,18 +357,26 @@ fn redraw(
     } else {
         Style::new().green().apply_to("●").to_string()
     };
-    let title = format!(
-        "{} {} → {}",
-        bullet,
-        Style::new().bold().apply_to(format!(
-            "{verb} {}",
-            truncate_middle(
-                &shared.url,
-                width.saturating_sub(measure_text_width(verb) + measure_text_width(dest) + 5)
-            )
-        )),
-        dest,
-    );
+    let fixed = measure_text_width(verb) + measure_text_width(dest) + 5;
+    let title = if fixed <= width {
+        format!(
+            "{} {} → {}",
+            bullet,
+            Style::new().bold().apply_to(format!(
+                "{verb} {}",
+                truncate_middle(&shared.url, width - fixed)
+            )),
+            dest,
+        )
+    } else {
+        // Even without the URL the header does not fit: truncate the end.
+        console::truncate_str(
+            &format!("{} {verb} {} → {dest}", bullet, shared.url),
+            width,
+            "…",
+        )
+        .to_string()
+    };
     header.set_message(title);
 
     // Summary
@@ -384,14 +392,15 @@ fn redraw(
     } else {
         shared.speed.bytes_per_second()
     };
-    summary.set_message(format!(
+    let line = format!(
         "  {:02}:{:02} · {} segments · {} · {}/s",
         elapsed / 60,
         elapsed % 60,
         shared.total_segments,
         human_bytes(shared.total_bytes),
         human_bytes(speed as u64),
-    ));
+    );
+    summary.set_message(console::truncate_str(&line, width, "…").to_string());
 
     for playlist in &mut shared.playlists {
         let row_message = row_text(playlist, shared.column_widths, width, now);
