@@ -524,10 +524,11 @@ fn detail_text(playlist: &PlaylistState, width: usize) -> String {
             },
         })
         .collect();
-    if entries.is_empty() {
+    if entries.is_empty() || width <= 4 {
         return String::new();
     }
-    fit_downloads(&entries, width.saturating_sub(4))
+    let text = fit_downloads(&entries, width - 4);
+    format!("    {}", console::truncate_str(&text, width - 4, "…"))
 }
 
 fn label_of(kind: &PlaylistKind) -> String {
@@ -824,10 +825,18 @@ mod tests {
                 "row wider than {width}: {row}"
             );
             let detail = detail_text(&playlist, width);
+            assert!(detail.starts_with("    "));
             assert!(
                 measure_text_width(&detail) <= width,
                 "detail wider than {width}: {detail}"
             );
+            for narrow_width in 0..20 {
+                let detail = detail_text(&playlist, narrow_width);
+                assert!(measure_text_width(&detail) <= narrow_width);
+                assert!(detail.is_empty() || detail.starts_with("    "));
+            }
+            playlist.downloads.clear();
+            assert!(detail_text(&playlist, width).is_empty());
         }
     }
 }
