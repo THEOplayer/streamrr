@@ -629,6 +629,9 @@ impl RecordProgress for TerminalProgress {
         };
         playlist.total += update.new_segments;
         playlist.gaps += update.new_gaps;
+        if matches!(playlist.status, Status::Waiting(_)) {
+            playlist.status = Status::Working;
+        }
     }
 
     fn playlist_waiting(&self, playlist: usize, next_refresh: DateTime<Utc>) {
@@ -798,6 +801,52 @@ mod tests {
             got: AtomicU64::new(120 * 1024),
             state: AtomicU8::new(0),
         })
+    }
+
+    #[test]
+    fn playlist_refresh_resumes_download_status() {
+        let progress = TerminalProgress::new("Recording", "output".to_string());
+        progress.playlists(&[PlaylistInfo {
+            path: String::new(),
+            kind: PlaylistKind::Media,
+        }]);
+        let update = PlaylistUpdate {
+            segments: 1,
+            new_segments: 1,
+            new_gaps: 0,
+            live: true,
+        };
+        let next = Utc::now() + chrono::Duration::seconds(10);
+        progress.playlist_waiting(0, next);
+        progress.playlist_loaded(0, &update);
+        {
+            let mut shared = progress.shared.lock().unwrap();
+            let playlist = &mut shared.playlists[0];
+            playlist.downloads.push(active("segment.ts"));
+            assert!(matches!(playlist.status, Status::Working));
+            assert!(row_text(playlist, (5, 0), 100, Instant::now()).contains("⇣ 1"));
+        }
+        progress.playlist_waiting(0, next);
+        {
+            let mut shared = progress.shared.lock().unwrap();
+            let playlist = &mut shared.playlists[0];
+            assert!(matches!(playlist.status, Status::Waiting(_)));
+            assert!(row_text(playlist, (5, 0), 100, Instant::now()).contains("↻ refresh"));
+        }
+        progress.playlist_loaded(99, &update);
+        progress.playlist_ended(0);
+        progress.playlist_loaded(
+            0,
+            &PlaylistUpdate {
+                live: false,
+                ..update
+            },
+        );
+        assert!(matches!(
+            progress.shared.lock().unwrap().playlists[0].status,
+            Status::Done
+        ));
+        progress.finish();
     }
 
     #[test]
