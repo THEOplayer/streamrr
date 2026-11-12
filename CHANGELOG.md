@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed an issue where a failed download left an empty or partial file in the recording, which was never repaired by recording or importing again. ([#10](https://github.com/THEOplayer/streamrr/issues/10))
+
 - Added `import` command to import an HTTP Archive (HAR) file as a recording. ([#9](https://github.com/THEOplayer/streamrr/pull/9))
 - The `replay` command now also accepts an HTTP Archive (HAR) file, which is served directly without importing it first.
 - `record` and `import` now show live progress in the terminal. ([#15](https://github.com/THEOplayer/streamrr/pull/15))
