@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use relative_path::{RelativePath, RelativePathBuf};
 use std::sync::Arc;
 use url::Url;
 
@@ -44,7 +45,7 @@ pub trait RecordProgress: Send + Sync {
     fn download_started(
         &self,
         playlist: usize,
-        path: &str,
+        path: &RelativePath,
         kind: ResourceKind,
     ) -> Box<dyn DownloadProgress> {
         let _ = (playlist, path, kind);
@@ -81,7 +82,7 @@ impl DownloadProgress for NoProgress {}
 #[derive(Clone)]
 pub struct PlaylistInfo {
     /// The recording-relative directory ("" for a single media playlist).
-    pub path: String,
+    pub path: RelativePathBuf,
     pub kind: PlaylistKind,
 }
 

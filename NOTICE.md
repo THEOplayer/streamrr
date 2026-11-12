@@ -24,6 +24,9 @@ This software bundles the following third-party libraries:
  - mime_guess version 2.0.5 (https://github.com/abonander/mime_guess)  
    Author: Austin Bonander <austin.bonander@gmail.com>  
    License: MIT
+ - relative-path version 2.0.3 (https://github.com/udoprog/relative-path)  
+   Author: John-John Tedro <udoprog@tedro.se>  
+   License: MIT OR Apache-2.0
  - reqwest version 0.13.5 (https://github.com/seanmonstar/reqwest)  
    Author: Sean McArthur <sean@seanmonstar.com>  
    License: MIT OR Apache-2.0

@@ -1,6 +1,7 @@
 use crate::record::{DownloadProgress, RecordError, Source, WithSize};
 use crate::shared::{ByteRange, Recording};
 use futures::TryStreamExt;
+use relative_path::{RelativePath, RelativePathBuf};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,10 +17,10 @@ use url::Url;
 
 /// The output a [`Recorder`](crate::record::Recorder) writes to.
 pub trait Storage: Clone + Send + Sync + 'static {
-    /// Write a playlist at the given recording-relative path (`/`-separated).
+    /// Write a playlist at the given recording-relative path.
     fn write_playlist(
         &self,
-        path: &str,
+        path: &RelativePath,
         contents: Vec<u8>,
     ) -> impl Future<Output = io::Result<()>> + Send;
 
@@ -31,7 +32,7 @@ pub trait Storage: Clone + Send + Sync + 'static {
         url: &Url,
         byte_range: Option<ByteRange>,
         download: &dyn DownloadProgress,
-        path: &str,
+        path: &RelativePath,
         token: CancellationToken,
     ) -> impl Future<Output = Result<(), RecordError>> + Send;
 
@@ -57,8 +58,8 @@ impl FsStorage {
 }
 
 impl Storage for FsStorage {
-    async fn write_playlist(&self, path: &str, contents: Vec<u8>) -> io::Result<()> {
-        let path = self.dest.join(path);
+    async fn write_playlist(&self, path: &RelativePath, contents: Vec<u8>) -> io::Result<()> {
+        let path = path.to_path(&self.dest);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
         }
@@ -71,10 +72,10 @@ impl Storage for FsStorage {
         url: &Url,
         byte_range: Option<ByteRange>,
         download: &dyn DownloadProgress,
-        path: &str,
+        path: &RelativePath,
         token: CancellationToken,
     ) -> Result<(), RecordError> {
-        let path = self.dest.join(path);
+        let path = path.to_path(&self.dest);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
         }
@@ -137,9 +138,9 @@ pub struct MemoryStorage {
 pub struct MemoryRecording {
     pub recording: Recording,
     /// Playlist contents by recording-relative path.
-    pub playlists: HashMap<String, Bytes>,
+    pub playlists: HashMap<RelativePathBuf, Bytes>,
     /// Resources by path, fetched from the source only when requested.
-    pub resources: HashMap<String, Resource>,
+    pub resources: HashMap<RelativePathBuf, Resource>,
 }
 
 /// A resource to be fetched from a source on demand.
@@ -157,12 +158,12 @@ impl MemoryStorage {
 }
 
 impl Storage for MemoryStorage {
-    async fn write_playlist(&self, path: &str, contents: Vec<u8>) -> io::Result<()> {
+    async fn write_playlist(&self, path: &RelativePath, contents: Vec<u8>) -> io::Result<()> {
         self.inner
             .lock()
             .unwrap()
             .playlists
-            .insert(path.to_string(), Bytes::from(contents));
+            .insert(path.to_owned(), Bytes::from(contents));
         Ok(())
     }
 
@@ -172,7 +173,7 @@ impl Storage for MemoryStorage {
         url: &Url,
         byte_range: Option<ByteRange>,
         download: &dyn DownloadProgress,
-        path: &str,
+        path: &RelativePath,
         _token: CancellationToken,
     ) -> Result<(), RecordError> {
         download.finish();
@@ -180,7 +181,7 @@ impl Storage for MemoryStorage {
             .lock()
             .unwrap()
             .resources
-            .entry(path.to_string())
+            .entry(path.to_owned())
             .or_insert(Resource {
                 url: url.clone(),
                 byte_range,

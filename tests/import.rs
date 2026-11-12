@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use insta::assert_snapshot;
+use relative_path::{PathExt, RelativePath};
 use reqwest::header::HeaderMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -203,15 +204,11 @@ async fn import_to_memory_matches_fs() {
         let mut resource_paths = HashSet::new();
         let mut recording_json = None;
         for file in files {
-            let relative = file
-                .strip_prefix(dir.path())
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
+            let relative = file.relative_to(dir.path()).unwrap();
             let bytes = fs::read(&file).unwrap();
             if relative == "recording.json" {
                 recording_json = Some(bytes);
-            } else if relative.ends_with(".m3u8") {
+            } else if relative.extension() == Some("m3u8") {
                 assert_eq!(
                     memory.playlists[&relative].as_ref(),
                     bytes.as_slice(),
@@ -333,7 +330,7 @@ impl RecordProgress for MockProgress {
                 }
                 PlaylistKind::Media => "media".to_string(),
             };
-            out.push((info.path.clone(), kind));
+            out.push((info.path.to_string(), kind));
         }
     }
     fn playlist_loaded(&self, playlist: usize, update: &PlaylistUpdate) {
@@ -348,7 +345,7 @@ impl RecordProgress for MockProgress {
     fn download_started(
         &self,
         _playlist: usize,
-        path: &str,
+        path: &RelativePath,
         kind: ResourceKind,
     ) -> Box<dyn DownloadProgress> {
         let record = Arc::new(DownloadRecord {

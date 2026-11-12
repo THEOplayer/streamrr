@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
 use m3u8_rs::Playlist;
+use relative_path::{RelativePath, RelativePathBuf};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::io;
@@ -76,9 +77,9 @@ impl Store {
     }
 
     /// Read a playlist at the given recording-relative path.
-    async fn read_playlist(&self, path: &str) -> Result<Vec<u8>, ReplayError> {
+    async fn read_playlist(&self, path: &RelativePath) -> Result<Vec<u8>, ReplayError> {
         match self {
-            Store::Directory { dir, .. } => fs::read(dir.join(path))
+            Store::Directory { dir, .. } => fs::read(path.to_path(dir))
                 .await
                 .map_err(|_| ReplayError::MissingPlaylist(path.to_string())),
             Store::Memory { recording, .. } => recording
@@ -194,9 +195,13 @@ fn routes(
             let store = playlist_store.clone();
             async move {
                 let start = params.start.ok_or_else(reject)?;
-                let relative_path =
-                    playlist_path_at_time(&file_name, store.recording(), recording_start, start)
-                        .ok_or_else(|| custom(ServerError::PlaylistNotFound(file_name)))?;
+                let relative_path = playlist_path_at_time(
+                    RelativePath::new(&file_name),
+                    store.recording(),
+                    recording_start,
+                    start,
+                )
+                .ok_or_else(|| custom(ServerError::PlaylistNotFound(file_name)))?;
                 let raw_playlist = store
                     .read_playlist(&relative_path)
                     .await
@@ -235,7 +240,8 @@ fn routes(
                         let Store::Memory { recording, source } = &*store else {
                             return Err(reject());
                         };
-                        let Some(resource) = recording.resources.get(path) else {
+                        let Some(resource) = recording.resources.get(RelativePath::new(path))
+                        else {
                             return Err(reject());
                         };
                         let bytes = source
@@ -267,11 +273,11 @@ fn routes(
 }
 
 fn playlist_path_at_time(
-    playlist_name: &str,
+    playlist_name: &RelativePath,
     recording: &Recording,
     recording_start: DateTime<Utc>,
     client_start: i64,
-) -> Option<String> {
+) -> Option<RelativePathBuf> {
     // At T = client_start + X, serve the playlist at recording_start + X
     let client_start = Utc.timestamp_millis_opt(client_start).single()?;
     let offset = Utc::now() - client_start;
@@ -279,7 +285,7 @@ fn playlist_path_at_time(
     let (_, relative_path) = recording
         .find_latest_before(playlist_name, recording_time)
         .or_else(|| recording.earliest_time_for(playlist_name))?;
-    Some(relative_path.to_string())
+    Some(relative_path.to_owned())
 }
 
 fn path_extension(ext: &'static str) -> impl Filter<Extract = (), Error = Rejection> + Clone {
