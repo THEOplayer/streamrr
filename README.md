@@ -156,10 +156,11 @@ unless a maintainer applies the `skip-changelog` label.
 1. In GitHub Actions, run the **Prepare release** workflow on `main`, choosing a `major`, `minor` or `patch` bump.
    This collects the pending changelog entries into a new version, updates the version in `Cargo.toml`,
    and opens a `release/vX.Y.Z` pull request.
-2. Review the release PR, wait for CI to pass, and merge it.
+2. Review the release PR, wait for CI to pass, and merge it with **Rebase and merge**.
+   That way, the release commit lands on `main` as just `vX.Y.Z`.
 3. Merging the release PR runs the **Tag release** workflow, which pushes a `vX.Y.Z` tag.
    That tag triggers the **Release** workflow, which builds the binaries and publishes the GitHub release
-   with the notes from `CHANGELOG.md`.
+   with the notes from `CHANGELOG.md`. Afterwards, the **Release title** job renames the release to just `vX.Y.Z`.
 
 If a release fails before it's published (e.g. a broken build), fix the problem on `main`
 and delete the `vX.Y.Z` tag. Then run the **Tag release** workflow on `main` to tag the latest commit again.

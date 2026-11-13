@@ -63,7 +63,7 @@ jobs:
           git config user.email '873105+theoplayer-bot[bot]@users.noreply.github.com'
           git switch -c "release/$VERSION"
           git add -A
-          git commit -m "Release $VERSION"
+          git commit -m "$VERSION"
           git push origin "release/$VERSION"
       - name: Create pull request
         env:
