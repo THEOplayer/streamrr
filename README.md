@@ -134,6 +134,23 @@ cd streamrr
 cargo install --path .
 ```
 
+## Changelog
+
+We use [Changie](https://changie.dev/) to manage the changelog. Don't edit `CHANGELOG.md` directly,
+it's generated from the files in `.changes/`.
+
+For every user-facing change, install [Changie v1.26.0](https://github.com/miniscruff/changie/releases/tag/v1.26.0)
+and run:
+
+```bash
+changie new
+```
+
+Write the entry in Markdown, including links to the relevant issues and pull requests,
+and commit the generated `.changes/unreleased/*.yaml` file along with your change.
+Pull requests without a new changelog entry fail the **Changelog** check,
+unless a maintainer applies the `skip-changelog` label.
+
 ## Third-party dependencies
 
 We use [`cargo-about`](https://github.com/EmbarkStudios/cargo-about/) to maintain the list of open-source licenses
