@@ -302,3 +302,12 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+
+  custom-release-title:
+    needs:
+      - plan
+      - announce
+    uses: $/.github/workflows/release-title.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit

@@ -1,0 +1,22 @@
+name: Release title
+on:
+  # Called by the Release workflow after the GitHub release is created
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  release-title:
+    name: Release title
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to edit the release
+    steps:
+      # dist uses the CHANGELOG.md heading (with the date) as the title, use just the tag instead
+      - name: Set release title to tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG"
