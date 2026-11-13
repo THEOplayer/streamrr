@@ -4,6 +4,8 @@ on:
   pull_request:
     branches: [ main ]
     types: [ closed ]
+  # Tags the selected commit by hand, e.g. to retry a failed release
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,11 +13,12 @@ permissions:
 jobs:
   tag:
     name: Tag release
-    # Run only for merged "release/vX.Y.Z" PRs from this repository
+    # Run only on main, or for merged "release/vX.Y.Z" PRs from this repository
     if: >-
-      github.event.pull_request.merged &&
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.pull_request.merged &&
       startsWith(github.head_ref, 'release/v') &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       # Use a GitHub App token, so the pushed tag triggers the release workflow
@@ -29,15 +32,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           token: ${{ steps.app-token.outputs.token }}
       - name: Get version
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           version="v$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "streamrr") | .version')"
-          if [ "$HEAD_REF" != "release/$version" ]; then
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$HEAD_REF" != "release/$version" ]; then
             echo "::error::Branch $HEAD_REF does not match version $version in Cargo.toml"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$version" > /dev/null; then
+            echo "::error::Tag $version already exists"
             exit 1
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"

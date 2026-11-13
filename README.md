@@ -161,6 +161,9 @@ unless a maintainer applies the `skip-changelog` label.
    That tag triggers the **Release** workflow, which builds the binaries and publishes the GitHub release
    with the notes from `CHANGELOG.md`.
 
+If a release fails before it's published (e.g. a broken build), fix the problem on `main`
+and delete the `vX.Y.Z` tag. Then run the **Tag release** workflow on `main` to tag the latest commit again.
+
 ## Third-party dependencies
 
 We use [`cargo-about`](https://github.com/EmbarkStudios/cargo-about/) to maintain the list of open-source licenses
