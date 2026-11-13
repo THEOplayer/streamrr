@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 (2026-11-13)
 
 - Added `import` command to import an HTTP Archive (HAR) file as a recording. ([#9](https://github.com/THEOplayer/streamrr/pull/9))
 - The `replay` command now also accepts an HTTP Archive (HAR) file, which is served directly without importing it first. ([#12](https://github.com/THEOplayer/streamrr/pull/12))
