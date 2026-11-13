@@ -2,6 +2,8 @@
 
 Record HLS streams and replay them afterwards.
 
+[![streamrr recording a stream](assets/record.gif)](https://asciinema.org/a/wuFkMqKDWwa2ygKY)
+
 ## Installation
 
 ### Option 1: Install from pre-built release
@@ -28,9 +30,16 @@ Record HLS streams and replay them afterwards.
    ```
    This will build the `streamrr` CLI tool, and then add it to your `$PATH`.
 
+If everything goes well, you should now be able to run:
+```bash
+streamrr --help
+```
+
+This will print the usage instructions.
+
 ## Usage
 
-The `streamrr` CLI has two main commands: `record` and `replay`.
+The CLI has three main commands: `record`, `replay` and `import`.
 
 ### Recording
 
@@ -61,9 +70,43 @@ The replayed stream is available at `http://localhost:8080/index.m3u8`.
 * If it's a recording of an HLS VOD stream, then the server will simply serve all files. (The tool doesn't do anything
   special in this case, you could also put the recorded files on any static web server.)
 
+`streamrr replay` can also serve an HTTP Archive (HAR) file directly, without importing it first:
+
+```bash
+streamrr replay capture.har
+```
+
+All captured variants and renditions are served, nothing is written to disk, and segments are decoded from the
+HAR only when requested.
+
 Run `streamrr replay --help` for the full instructions.
 
-### Sharing recordings
+### Importing
+
+`streamrr import` will import an HTTP Archive (HAR) file as a recording.
+
+In your browser's developer tools, open the *Network* tab while playing the stream, then save all captured
+requests as a HAR file. In Chrome and Edge, right-click in the request list and choose *"Save all as HAR with content"*
+(or use the *Export HAR* button). In Firefox, right-click and choose *"Save All As HAR"*. Make sure response content
+is included.
+
+```bash
+streamrr import capture.har recordings/mystream/
+```
+
+This will import the first HLS playlist found in the HAR file. To import a different stream, pass its playlist URL
+with `--url`:
+
+```bash
+streamrr import --url https://example.com/mystream.m3u8 capture.har recordings/mystream/
+```
+
+Requests that were not captured (for example, segments that were already cached by the browser) are marked with
+`#EXT-X-GAP` in the imported playlists. Low-Latency HLS (LL-HLS) streams are not supported yet.
+
+Run `streamrr import --help` for the full instructions.
+
+## Sharing recordings
 
 All files necessary to replay the stream are saved directly to the given recording directory. You can easily share these
 recordings with others by putting them in an archive:
