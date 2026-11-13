@@ -63,9 +63,8 @@ jobs:
           persist-credentials: false
       # Validate even when the entry requirement is waived. Empty batches are
       # allowed because release preparation removes the pending fragments.
-      - name: Install Changie
-        uses: ./.github/actions/install-changie
+      - name: Validate fragments with Changie
+        uses: miniscruff/changie-action@v3
         with:
           version: v1.26.0
-      - name: Validate fragments with Changie
-        run: changie batch major --dry-run
+          args: batch major --dry-run
