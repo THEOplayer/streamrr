@@ -1,0 +1,76 @@
+name: Prepare release
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        required: true
+        default: patch
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-release
+
+jobs:
+  prepare:
+    name: Prepare release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      # Use a GitHub App token, so CI runs on the release PR
+      - name: Create app token
+        uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.THEOPLAYER_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.THEOPLAYER_BOT_PRIVATE_KEY }}
+          permission-contents: write # to push the release branch
+          permission-pull-requests: write # to create the release PR
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Install Changie
+        uses: miniscruff/changie-action@v3
+        with:
+          version: v1.26.0
+      - name: Update changelog
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          changie batch "$BUMP"
+          changie merge
+          echo "VERSION=$(changie latest)" >> "$GITHUB_ENV"
+      - name: Update version in Cargo.toml
+        run: |
+          version="${VERSION#v}"
+          sed -i "0,/^version = \".*\"$/s//version = \"$version\"/" Cargo.toml
+          actual="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "streamrr") | .version')"
+          if [ "$actual" != "$version" ]; then
+            echo "::error::Expected version $version in Cargo.toml, got $actual"
+            exit 1
+          fi
+      - name: Push release branch
+        run: |
+          git config user.name 'theoplayer-bot[bot]'
+          git config user.email '873105+theoplayer-bot[bot]@users.noreply.github.com'
+          git switch -c "release/$VERSION"
+          git add -A
+          git commit -m "Release $VERSION"
+          git push origin "release/$VERSION"
+      - name: Create pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh pr create \
+            --base main \
+            --head "release/$VERSION" \
+            --title "Release $VERSION" \
+            --body-file ".changes/$VERSION.md"
