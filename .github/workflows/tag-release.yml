@@ -1,0 +1,49 @@
+name: Tag release
+on:
+  # Runs whenever a release PR is merged
+  pull_request:
+    branches: [ main ]
+    types: [ closed ]
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    name: Tag release
+    # Run only for merged "release/vX.Y.Z" PRs from this repository
+    if: >-
+      github.event.pull_request.merged &&
+      startsWith(github.head_ref, 'release/v') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      # Use a GitHub App token, so the pushed tag triggers the release workflow
+      - name: Create app token
+        uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.THEOPLAYER_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.THEOPLAYER_BOT_PRIVATE_KEY }}
+          permission-contents: write # to push the tag
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Get version
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          version="v$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "streamrr") | .version')"
+          if [ "$HEAD_REF" != "release/$version" ]; then
+            echo "::error::Branch $HEAD_REF does not match version $version in Cargo.toml"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Push tag
+        run: |
+          git config user.name 'theoplayer-bot[bot]'
+          git config user.email '873105+theoplayer-bot[bot]@users.noreply.github.com'
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin "$VERSION"
